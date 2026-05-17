@@ -14,6 +14,7 @@ import { run as runOffer       } from './tests/05-offer.mjs';
 import { run as runEscrow      } from './tests/06-escrow.mjs';
 import { run as runCheck       } from './tests/07-check.mjs';
 import { run as runNft         } from './tests/08-nft.mjs';
+import { run as runMPToken     } from './tests/09-mptoken.mjs';
 
 const client = await createClient();
 const [alice, bob] = await fundWallets(client, 2);
@@ -48,7 +49,9 @@ accumulate(await runEscrow(client, alice, bob));
 console.log('');
 accumulate(await runCheck (client, alice, bob));
 console.log('');
-accumulate(await runNft   (client, alice, bob));
+accumulate(await runNft     (client, alice, bob));
+console.log('');
+accumulate(await runMPToken (client, alice, bob));
 
 await client.disconnect();
 
