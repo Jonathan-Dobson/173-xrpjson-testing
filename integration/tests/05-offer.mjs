@@ -1,5 +1,5 @@
 import { xrpToDrops } from 'xrpl';
-import { OfferCreateTx, OfferCancelTx } from 'xrp-tx';
+import { OfferCreateTx, OfferCancelTx } from 'xrplt';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 export async function run(client, alice, bob) {

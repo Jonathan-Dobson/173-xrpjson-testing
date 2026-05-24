@@ -1,4 +1,4 @@
-import { TrustSetTx } from 'xrp-tx';
+import { TrustSetTx } from 'xrplt';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 export async function run(client, alice, bob) {

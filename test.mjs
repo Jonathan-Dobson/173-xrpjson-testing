@@ -11,7 +11,7 @@ import {
   TransactionRegistry,
   PaymentFlags,
   AccountSetAsfFlags,
-} from 'xrp-tx';
+} from 'xrplt';
 
 const ACCOUNT_A = 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh';
 const ACCOUNT_B = 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe';

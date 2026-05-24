@@ -18,7 +18,7 @@ import {
   MPTokenIssuanceDestroyTx,
   MPTokenAuthorizeTx,
   PaymentTx,
-} from 'xrp-tx';
+} from 'xrplt';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 const tfMPTUnauthorize = 1; // MPTokenAuthorize — not exported by xrpl.js

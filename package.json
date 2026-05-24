@@ -10,7 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "xrp-tx": "^0.3.2",
-    "xrpl": "^4.6.0"
+    "xrpl": "^4.6.0",
+    "xrplt": "^0.3.4"
   }
 }
