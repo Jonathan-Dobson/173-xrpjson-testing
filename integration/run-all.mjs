@@ -16,6 +16,7 @@ import { run as runCheck       } from './tests/07-check.mjs';
 import { run as runNft         } from './tests/08-nft.mjs';
 import { run as runMPToken     } from './tests/09-mptoken.mjs';
 import { run as runIOU         } from './tests/10-iou.mjs';
+import { run as runCheckIou    } from './tests/11-check-iou.mjs';
 
 const client = await createClient();
 const [alice, bob] = await fundWallets(client, 2);
@@ -55,6 +56,8 @@ console.log('');
 accumulate(await runMPToken (client, alice, bob));
 console.log('');
 accumulate(await runIOU     (client, alice, bob));
+console.log('');
+accumulate(await runCheckIou(client, alice, bob));
 
 await client.disconnect();
 
