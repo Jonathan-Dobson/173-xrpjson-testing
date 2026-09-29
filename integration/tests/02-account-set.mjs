@@ -1,4 +1,4 @@
-import { AccountSetTx, AccountSetAsfFlags } from 'xrplt';
+import { AccountSetTx, AccountSetAsfFlags } from '../../xrpjson.mjs';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 export async function run(client, alice, bob) {

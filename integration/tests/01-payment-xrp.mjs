@@ -1,5 +1,5 @@
 import { xrpToDrops } from 'xrpl';
-import { PaymentTx } from 'xrplt';
+import { PaymentTx } from '../../xrpjson.mjs';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 export async function run(client, alice, bob) {

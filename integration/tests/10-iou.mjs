@@ -21,7 +21,7 @@ import {
   ClawbackTx,
   TrustSetFlags,
   AccountSetAsfFlags,
-} from 'xrplt';
+} from '../../xrpjson.mjs';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 function ica(currency, issuer, value) {

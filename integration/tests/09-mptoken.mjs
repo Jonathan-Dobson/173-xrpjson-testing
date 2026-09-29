@@ -11,14 +11,15 @@
  * It must be fetched from account_objects after creation.
  */
 
-import { MPTokenIssuanceCreateFlags, MPTokenIssuanceSetFlags } from 'xrpl';
 import {
   MPTokenIssuanceCreateTx,
   MPTokenIssuanceSetTx,
   MPTokenIssuanceDestroyTx,
   MPTokenAuthorizeTx,
   PaymentTx,
-} from 'xrplt';
+  MPTokenIssuanceCreateFlags,
+  MPTokenIssuanceSetFlags,
+} from '../../xrpjson.mjs';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 const tfMPTUnauthorize = 1; // MPTokenAuthorize — not exported by xrpl.js

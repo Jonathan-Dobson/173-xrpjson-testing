@@ -12,7 +12,7 @@ export function xrplNow() {
 }
 
 /**
- * Autofill, sign, and submit a transaction built with xrp-tx.
+ * Autofill, sign, and submit a transaction built with xrpjson.
  * Returns the full submitAndWait() response.
  */
 export async function submitTx(client, txObj, wallet) {

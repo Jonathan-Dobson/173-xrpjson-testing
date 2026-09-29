@@ -24,7 +24,7 @@ import {
   CheckCancelTx,
   EscrowCreateTx,
   AccountSetAsfFlags,
-} from 'xrplt';
+} from '../../xrpjson.mjs';
 import {
   createRunner,
   assertSuccess,
@@ -263,7 +263,7 @@ export async function run(client, alice, bob) {
 
   // ── 6. EscrowCreate with IOU Amount → rejected by ledger ─────────────────
   // Documents the hard ledger rule: Escrow is XRP-only.
-  // xrplt's validate() does not catch this (it doesn't know the ledger rule);
+  // The class API's validate() does not catch this (it doesn't know the ledger rule);
   // the rejection happens at submission time as a temBAD_AMOUNT / tem* error.
   await runTest('EscrowCreate with IOU Amount is rejected by the ledger (tem*)', async () => {
     if (!carol) throw new Error('No carol from prior test');

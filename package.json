@@ -3,14 +3,15 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test.mjs",
+    "test:integration": "node integration/run-all.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "xrpl": "^4.6.0",
-    "xrplt": "^0.3.4"
+    "xrpjson": "^1.0.0",
+    "xrpl": "^4.6.0"
   }
 }

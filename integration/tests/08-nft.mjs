@@ -1,5 +1,5 @@
 import { xrpToDrops } from 'xrpl';
-import { NFTokenMintTx, NFTokenBurnTx, NFTokenCreateOfferTx, NFTokenAcceptOfferTx } from 'xrplt';
+import { NFTokenMintTx, NFTokenBurnTx, NFTokenCreateOfferTx, NFTokenAcceptOfferTx } from '../../xrpjson.mjs';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 function extractNFTokenId(response) {

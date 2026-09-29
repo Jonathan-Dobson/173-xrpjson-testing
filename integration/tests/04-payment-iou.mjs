@@ -1,4 +1,4 @@
-import { PaymentTx, TrustSetTx } from 'xrplt';
+import { PaymentTx, TrustSetTx } from '../../xrpjson.mjs';
 import { createRunner, assertSuccess, submitTx } from '../helpers.mjs';
 
 /**

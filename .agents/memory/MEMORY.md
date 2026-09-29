@@ -1,0 +1,1 @@
+- [xrpjson package publishing](xrpjson-package-publishing.md) — the published package currently omits its documented root build and fp export; keep any workaround centralized.

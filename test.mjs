@@ -1,17 +1,16 @@
 import {
-  Transaction,
-  PaymentTx,
-  AccountSetTx,
-  TrustSetTx,
-  EscrowCreateTx,
-  NFTokenMintTx,
-  OfferCreateTx,
-  AMMCreateTx,
+  accountSet,
+  ammCreate,
+  escrowCreate,
+  nftokenMint,
+  offerCreate,
+  payment,
+  trustSet,
   ValidationError,
-  TransactionRegistry,
   PaymentFlags,
   AccountSetAsfFlags,
-} from 'xrplt';
+  TrustSetFlags,
+} from './xrpjson.mjs';
 
 const ACCOUNT_A = 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh';
 const ACCOUNT_B = 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe';
@@ -35,96 +34,99 @@ function assert(condition, msg) {
   if (!condition) throw new Error(msg || 'Assertion failed');
 }
 
-// ─── 1. PaymentTx ───────────────────────────────────────────────────────────
-console.log('\n[1] PaymentTx');
+function assertThrows(fn, message) {
+  let error;
+  try {
+    fn();
+  } catch (e) {
+    error = e;
+  }
+  assert(error instanceof ValidationError, message || 'Expected ValidationError');
+}
 
-test('create via concrete class', () => {
-  const tx = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' });
+function validPayment(overrides = {}) {
+  return payment({
+    Account: ACCOUNT_A,
+    Destination: ACCOUNT_B,
+    Amount: '1000000',
+    ...overrides,
+  });
+}
+
+const VALID_RIPPLE_TIME = 946684800 + 3600;
+
+// ─── 1. Payment factory ──────────────────────────────────────────────────────
+console.log('\n[1] Payment factory');
+
+test('creates a payment with the expected transaction shape', () => {
+  const tx = validPayment();
   assert(tx.TransactionType === 'Payment');
   assert(tx.Amount === '1000000');
   assert(tx.Destination === ACCOUNT_B);
 });
 
-test('create via Transaction factory', () => {
-  const tx = Transaction.payment({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '2000000' });
-  assert(tx.TransactionType === 'Payment');
-  assert(tx.Amount === '2000000');
+test('validates required fields at construction time', () => {
+  assertThrows(
+    () => payment({ Account: ACCOUNT_A, Destination: ACCOUNT_B }),
+    'Expected missing Amount to throw ValidationError',
+  );
 });
 
-test('validate() passes for valid payment', () => {
-  const tx = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' });
-  tx.validate();
-});
-
-test('validate() throws for missing Amount', () => {
-  const tx = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: undefined });
-  let threw = false;
-  try { tx.validate(); } catch (e) { threw = e instanceof ValidationError; }
-  assert(threw, 'Expected ValidationError');
-});
-
-test('validate() does NOT catch Account === Destination (known gap)', () => {
-  // The package does not validate this case — documenting actual behaviour
-  const tx = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_A, Amount: '1000000' });
-  let threw = false;
-  try { tx.validate(); } catch (e) { threw = true; }
-  assert(!threw, 'Package currently skips same-account check — gap confirmed');
-});
-
-test('toJSON() returns correct shape', () => {
-  const tx = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' });
-  const json = tx.toJSON();
+test('toJSON() returns the canonical wire shape', () => {
+  const json = validPayment().toJSON();
   assert(json.TransactionType === 'Payment');
   assert(json.Account === ACCOUNT_A);
   assert(json.Amount === '1000000');
 });
 
-test('toJSON() excludes undefined fields', () => {
-  const tx = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' });
-  const json = tx.toJSON();
+test('toJSON() excludes unset optional fields', () => {
+  const json = validPayment().toJSON();
   assert(!('Fee' in json), 'Fee should not appear when unset');
   assert(!('Sequence' in json), 'Sequence should not appear when unset');
 });
 
-test('IOU amount (IssuedCurrencyAmount)', () => {
-  const tx = new PaymentTx({
-    Account: ACCOUNT_A,
-    Destination: ACCOUNT_B,
+test('supports issued-currency amounts', () => {
+  const json = validPayment({
     Amount: { currency: 'USD', issuer: ACCOUNT_B, value: '10' },
-  });
-  tx.validate();
-  const json = tx.toJSON();
-  assert(typeof json.Amount === 'object');
+  }).toJSON();
   assert(json.Amount.currency === 'USD');
+  assert(json.Amount.issuer === ACCOUNT_B);
 });
 
-// ─── 2. Immutable .with() ────────────────────────────────────────────────────
-console.log('\n[2] Immutable .with()');
-
-test('.with() creates a new instance with updated fields', () => {
-  const tx1 = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' });
-  const tx2 = tx1.with({ Fee: '12', Sequence: 42 });
-  assert(tx2.Fee === '12');
-  assert(tx2.Sequence === 42);
-  assert(tx1.Fee === undefined, 'Original should be unchanged');
-  assert(tx1.Sequence === undefined, 'Original should be unchanged');
+test('returns an immutable transaction', () => {
+  const tx = validPayment();
+  assert(Object.isFrozen(tx), 'Transaction should be frozen');
+  assert(!Object.isFrozen(tx.toJSON()), 'toJSON() should return a plain wire object');
 });
 
-test('.with() preserves original fields', () => {
-  const tx1 = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' });
-  const tx2 = tx1.with({ Fee: '12' });
-  assert(tx2.Amount === '1000000');
-  assert(tx2.Destination === ACCOUNT_B);
+// ─── 2. Immutable with() ─────────────────────────────────────────────────────
+console.log('\n[2] Immutable with()');
+
+test('with() creates a new validated transaction', () => {
+  const original = validPayment();
+  const updated = original.with({ Fee: '12', Sequence: 42 });
+  assert(updated !== original);
+  assert(updated.Fee === '12');
+  assert(updated.Sequence === 42);
+  assert(original.Fee === undefined, 'Original should be unchanged');
 });
 
-test('.with() returns same TransactionType', () => {
-  const tx1 = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' });
-  const tx2 = tx1.with({ Fee: '12' });
-  assert(tx2.TransactionType === 'Payment');
+test('with() preserves original fields and transaction type', () => {
+  const updated = validPayment().with({ Fee: '12' });
+  assert(updated.Amount === '1000000');
+  assert(updated.Destination === ACCOUNT_B);
+  assert(updated.TransactionType === 'Payment');
 });
 
-test('chained .with() calls', () => {
-  const tx = new PaymentTx({ Account: ACCOUNT_A, Destination: ACCOUNT_B, Amount: '1000000' })
+test('with() revalidates overrides', () => {
+  assertThrows(
+    () => validPayment().with({ Amount: undefined }),
+    'Expected invalid override to throw ValidationError',
+  );
+});
+
+test('supports chained with() calls', () => {
+  const tx = validPayment()
     .with({ Fee: '12' })
     .with({ Sequence: 1 })
     .with({ LastLedgerSequence: 1000 });
@@ -133,170 +135,103 @@ test('chained .with() calls', () => {
   assert(tx.LastLedgerSequence === 1000);
 });
 
-// ─── 3. Flags ────────────────────────────────────────────────────────────────
+// ─── 3. Flags ─────────────────────────────────────────────────────────────────
 console.log('\n[3] Flags');
 
-test('PaymentFlags enum values are numbers', () => {
-  assert(typeof PaymentFlags.tfNoRippleDirect === 'number');
-  assert(typeof PaymentFlags.tfPartialPayment === 'number');
-});
-
-test('set numeric flags on payment', () => {
-  const tx = new PaymentTx({
-    Account: ACCOUNT_A,
-    Destination: ACCOUNT_B,
-    Amount: '1000000',
-    Flags: PaymentFlags.tfPartialPayment,
-  });
+test('accepts numeric payment flags', () => {
+  const tx = validPayment({ Flags: PaymentFlags.tfPartialPayment });
   assert(tx.Flags === PaymentFlags.tfPartialPayment);
 });
 
-// ─── 4. AccountSetTx ─────────────────────────────────────────────────────────
-console.log('\n[4] AccountSetTx');
+test('accepts the boolean-map flag form', () => {
+  const tx = validPayment({ Flags: { tfPartialPayment: true } });
+  assert(tx.toJSON().Flags.tfPartialPayment === true);
+});
 
-test('create AccountSet with Domain', () => {
-  const tx = new AccountSetTx({
+test('accepts account-set flags', () => {
+  const tx = accountSet({
     Account: ACCOUNT_A,
-    Domain: '6578616d706c652e636f6d', // hex
     SetFlag: AccountSetAsfFlags.asfRequireDest,
   });
   assert(tx.TransactionType === 'AccountSet');
-  tx.validate();
 });
 
-// ─── 5. TrustSetTx ───────────────────────────────────────────────────────────
-console.log('\n[5] TrustSetTx');
-
-test('create TrustSet', () => {
-  const tx = new TrustSetTx({
+test('accepts trust-set flags', () => {
+  const tx = trustSet({
     Account: ACCOUNT_A,
     LimitAmount: { currency: 'USD', issuer: ACCOUNT_B, value: '1000' },
+    Flags: TrustSetFlags.tfSetNoRipple,
   });
   assert(tx.TransactionType === 'TrustSet');
-  tx.validate();
 });
 
-// ─── 6. EscrowCreateTx ───────────────────────────────────────────────────────
-console.log('\n[6] EscrowCreateTx');
+// ─── 4. Representative factories ────────────────────────────────────────────
+console.log('\n[4] Representative factories');
 
-test('create Escrow', () => {
-  const tx = new EscrowCreateTx({
+test('creates and serializes AccountSet', () => {
+  const json = accountSet({
+    Account: ACCOUNT_A,
+    Domain: '6578616d706c652e636f6d',
+    SetFlag: AccountSetAsfFlags.asfRequireDest,
+  }).toJSON();
+  assert(json.TransactionType === 'AccountSet');
+  assert(json.Domain === '6578616d706c652e636f6d');
+});
+
+test('creates and serializes TrustSet', () => {
+  const json = trustSet({
+    Account: ACCOUNT_A,
+    LimitAmount: { currency: 'USD', issuer: ACCOUNT_B, value: '1000' },
+  }).toJSON();
+  assert(json.TransactionType === 'TrustSet');
+  assert(json.LimitAmount.currency === 'USD');
+});
+
+test('creates and serializes EscrowCreate', () => {
+  const json = escrowCreate({
     Account: ACCOUNT_A,
     Destination: ACCOUNT_B,
     Amount: '5000000',
-    FinishAfter: 800000000,
-  });
-  assert(tx.TransactionType === 'EscrowCreate');
-  tx.validate();
+    FinishAfter: VALID_RIPPLE_TIME,
+  }).toJSON();
+  assert(json.TransactionType === 'EscrowCreate');
+  assert(json.FinishAfter === VALID_RIPPLE_TIME);
 });
 
-test('Escrow toJSON includes FinishAfter', () => {
-  const tx = new EscrowCreateTx({
-    Account: ACCOUNT_A,
-    Destination: ACCOUNT_B,
-    Amount: '5000000',
-    FinishAfter: 800000000,
-  });
-  assert(tx.toJSON().FinishAfter === 800000000);
-});
-
-// ─── 7. NFTokenMintTx ────────────────────────────────────────────────────────
-console.log('\n[7] NFTokenMintTx');
-
-test('mint NFT with taxon', () => {
-  const tx = new NFTokenMintTx({
-    Account: ACCOUNT_A,
-    NFTokenTaxon: 0,
-  });
-  assert(tx.TransactionType === 'NFTokenMint');
-  tx.validate();
-});
-
-test('mint NFT with URI and transfer fee', () => {
-  const tx = new NFTokenMintTx({
+test('creates and serializes NFTokenMint', () => {
+  const json = nftokenMint({
     Account: ACCOUNT_A,
     NFTokenTaxon: 1,
     TransferFee: 5000,
+    Flags: 8,
     URI: '68747470733a2f2f6578616d706c652e636f6d2f6e66742e6a736f6e',
-  });
-  tx.validate();
-  assert(tx.TransferFee === 5000);
+  }).toJSON();
+  assert(json.TransactionType === 'NFTokenMint');
+  assert(json.TransferFee === 5000);
 });
 
-// ─── 8. OfferCreateTx ────────────────────────────────────────────────────────
-console.log('\n[8] OfferCreateTx');
-
-test('create DEX offer (XRP for IOU)', () => {
-  const tx = new OfferCreateTx({
+test('creates and serializes OfferCreate', () => {
+  const json = offerCreate({
     Account: ACCOUNT_A,
     TakerPays: { currency: 'USD', issuer: ACCOUNT_B, value: '100' },
     TakerGets: '200000000',
-  });
-  assert(tx.TransactionType === 'OfferCreate');
-  tx.validate();
+  }).toJSON();
+  assert(json.TransactionType === 'OfferCreate');
+  assert(json.TakerPays.currency === 'USD');
 });
 
-// ─── 9. TransactionRegistry ──────────────────────────────────────────────────
-console.log('\n[9] TransactionRegistry');
-
-test('TransactionRegistry.get() returns the correct constructor', () => {
-  const Ctor = TransactionRegistry.get('Payment');
-  assert(Ctor === PaymentTx, 'Expected PaymentTx constructor');
-});
-
-test('TransactionRegistry.has() returns true for known types', () => {
-  assert(TransactionRegistry.has('Payment'));
-  assert(TransactionRegistry.has('NFTokenMint'));
-  assert(TransactionRegistry.has('AMMCreate'));
-  assert(!TransactionRegistry.has('FakeTransaction'));
-});
-
-test('TransactionRegistry.types() lists all 71 transaction types', () => {
-  const types = TransactionRegistry.types();
-  assert(types.length >= 71, `Expected ≥71 types, got ${types.length}`);
-  assert(types.includes('Payment'));
-  assert(types.includes('EscrowCreate'));
-});
-
-test('Transaction.create() reconstructs a Payment from plain fields', () => {
-  const tx = Transaction.create('Payment', {
-    Account: ACCOUNT_A,
-    Destination: ACCOUNT_B,
-    Amount: '1000000',
-  });
-  assert(tx instanceof PaymentTx);
-  assert(tx.TransactionType === 'Payment');
-});
-
-test('Transaction.create() round-trips through toJSON()', () => {
-  const original = new PaymentTx({
-    Account: ACCOUNT_A,
-    Destination: ACCOUNT_B,
-    Amount: '1000000',
-    Fee: '12',
-    Sequence: 7,
-  });
-  const json = original.toJSON();
-  const reconstructed = Transaction.create(json.TransactionType, json);
-  assert(reconstructed.toJSON().Fee === '12');
-  assert(reconstructed.toJSON().Sequence === 7);
-});
-
-// ─── 10. AMMCreateTx ─────────────────────────────────────────────────────────
-console.log('\n[10] AMMCreateTx');
-
-test('create AMM pool', () => {
-  const tx = new AMMCreateTx({
+test('creates and serializes AMMCreate', () => {
+  const json = ammCreate({
     Account: ACCOUNT_A,
     Amount: '1000000',
     Amount2: { currency: 'USD', issuer: ACCOUNT_B, value: '500' },
     TradingFee: 500,
-  });
-  assert(tx.TransactionType === 'AMMCreate');
-  tx.validate();
+  }).toJSON();
+  assert(json.TransactionType === 'AMMCreate');
+  assert(json.TradingFee === 500);
 });
 
-// ─── Summary ─────────────────────────────────────────────────────────────────
+// ─── Summary ──────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(45)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

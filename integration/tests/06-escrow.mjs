@@ -1,5 +1,5 @@
 import { xrpToDrops } from 'xrpl';
-import { EscrowCreateTx, EscrowFinishTx, EscrowCancelTx } from 'xrplt';
+import { EscrowCreateTx, EscrowFinishTx, EscrowCancelTx } from '../../xrpjson.mjs';
 import { createRunner, assertSuccess, submitTx, xrplNow } from '../helpers.mjs';
 
 export async function run(client, alice, bob) {
