@@ -8,6 +8,7 @@
 import { createClient, fundWallets } from './setup.mjs';
 import { run as runPaymentXrp  } from './tests/01-payment-xrp.mjs';
 import { run as runAccountSet  } from './tests/02-account-set.mjs';
+import { run as runIOU         } from './tests/10-iou.mjs';
 import { run as runTrustSet    } from './tests/03-trust-set.mjs';
 import { run as runPaymentIou  } from './tests/04-payment-iou.mjs';
 import { run as runOffer       } from './tests/05-offer.mjs';
@@ -15,7 +16,6 @@ import { run as runEscrow      } from './tests/06-escrow.mjs';
 import { run as runCheck       } from './tests/07-check.mjs';
 import { run as runNft         } from './tests/08-nft.mjs';
 import { run as runMPToken     } from './tests/09-mptoken.mjs';
-import { run as runIOU         } from './tests/10-iou.mjs';
 import { run as runCheckIou    } from './tests/11-check-iou.mjs';
 
 const client = await createClient();
@@ -36,6 +36,12 @@ console.log('');
 accumulate(await runAccountSet(client, alice, bob));
 console.log('');
 
+// [10] IOU — must run BEFORE TrustSet: the suite enables
+// asfAllowTrustLineClawback on Bob, which requires zero trust lines.
+// Running it first avoids `tecOWNERS` from the TrustSet that [3] does.
+accumulate(await runIOU(client, alice, bob));
+console.log('');
+
 // [3] TrustSet — must run before IOU payment tests
 accumulate(await runTrustSet(client, alice, bob));
 console.log('');
@@ -54,8 +60,6 @@ console.log('');
 accumulate(await runNft     (client, alice, bob));
 console.log('');
 accumulate(await runMPToken (client, alice, bob));
-console.log('');
-accumulate(await runIOU     (client, alice, bob));
 console.log('');
 accumulate(await runCheckIou(client, alice, bob));
 

@@ -157,11 +157,19 @@ export async function run(client, alice, bob) {
   // Bob (issuer) freezes Alice's USD trust line from his side.
   // Frozen trust lines still allow transfers BACK to the issuer but block
   // all other paths — Alice → Carol should fail.
+  //
+  // IMPORTANT: when issuer-side freezes via TrustSet, the LimitAmount value
+  // sets the ISSUER's view of the limit. Using value="0" here would also
+  // collapse Bob's HighLimit to 0, blocking all subsequent payments that
+  // route through Bob (which the unfreeze does NOT restore). Use a
+  // non-zero value to preserve Bob's HighLimit across the freeze/unfreeze.
+  // See xrpl.org/docs/concepts/tokens/fungible-tokens/freezes.md.
   await runTest('Bob freezes Alice USD trust line (issuer-side freeze)', async () => {
     const tx = new TrustSetTx({
       Account:     bob.classicAddress,
-      // LimitAmount.issuer = counterparty (Alice) when Bob is modifying his side
-      LimitAmount: ica('USD', alice.classicAddress, '0'),
+      // LimitAmount.issuer = counterparty (Alice) when Bob is modifying his side.
+      // value must be > 0 to preserve HighLimit (issuer view of the limit).
+      LimitAmount: ica('USD', alice.classicAddress, '50000'),
       Flags:       TrustSetFlags.tfSetFreeze,
     });
     tx.validate();
@@ -186,7 +194,7 @@ export async function run(client, alice, bob) {
   await runTest('Bob unfreezes Alice USD trust line', async () => {
     const tx = new TrustSetTx({
       Account:     bob.classicAddress,
-      LimitAmount: ica('USD', alice.classicAddress, '0'),
+      LimitAmount: ica('USD', alice.classicAddress, '50000'),
       Flags:       TrustSetFlags.tfClearFreeze,
     });
     tx.validate();
