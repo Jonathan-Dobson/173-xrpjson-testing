@@ -3,8 +3,8 @@ name: xrpjson package publishing
 description: Published xrpjson package export and timestamp-validation quirks discovered while migrating tests.
 ---
 
-The published xrpjson 1.0.0 package declares its root entry as `dist/index.js`, but that file is not included in the tarball. Its functional factories are present under `dist/fp/index.js`, yet the package export map does not expose an `./fp` subpath. The package also rejects current Ripple-epoch timestamps because its escrow/check timestamp guard compares them to the Unix/Ripple epoch offset instead of the current Ripple time.
+The published xrpjson 1.0.2 package now exposes its functional factories from the documented root import. Its errors and flags are still not exported from the root, so the test adapter keeps direct imports for those two internal files. The package still rejects current Ripple-epoch timestamps because its escrow timestamp guard compares them to the Unix/Ripple epoch offset instead of the current Ripple time.
 
-**Why:** Tests cannot import the documented package root, and valid live-ledger escrow/check timestamps fail factory construction before submission.
+**Why:** The 1.0.2 release fixes the factory import problem, but valid live-ledger escrow timestamps still fail factory construction before submission.
 
-**How to apply:** Keep the direct built-file import in one adapter until a published xrpjson release fixes the export map and timestamp guard; then switch the adapter to the documented public import and remove the workaround.
+**How to apply:** Use the package root for factories. Keep direct built-file imports for errors and flags until they are publicly exported, and keep the timestamp workaround isolated until the validation guard is corrected.

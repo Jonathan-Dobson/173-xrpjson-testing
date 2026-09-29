@@ -1,1 +1,1 @@
-- [xrpjson package publishing](xrpjson-package-publishing.md) — the published package currently omits its documented root build and fp export; keep any workaround centralized.
+- [xrpjson package publishing](xrpjson-package-publishing.md) — v1.0.2 fixes the factory root export; errors/flags remain internal and current escrow timestamps still fail validation.

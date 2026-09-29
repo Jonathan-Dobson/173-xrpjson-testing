@@ -1,7 +1,5 @@
-// xrpjson 1.0.0 publishes its functional entry point in dist/fp but does
-// not expose that subpath (and its root export points at a missing file).
-// Keep the workaround in one place until the package export map is fixed.
-export * from './node_modules/xrpjson/dist/fp/index.js';
+// xrpjson 1.0.2 exposes its functional factories from the documented root.
+export * from 'xrpjson';
 export { ValidationError, TransactionError } from './node_modules/xrpjson/dist/errors.js';
 export * from './node_modules/xrpjson/dist/types/flags.js';
 
@@ -30,4 +28,4 @@ export {
   mptokenAuthorize as MPTokenAuthorizeTx,
   clawback as ClawbackTx,
   ammCreate as AMMCreateTx,
-} from './node_modules/xrpjson/dist/fp/index.js';
+} from 'xrpjson';
