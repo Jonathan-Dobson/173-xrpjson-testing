@@ -69,6 +69,18 @@ export async function run(client, alice, bob) {
     }
   });
 
+  // Bob sets his HighLimit on Carol's trust line so rippling through Bob
+  // (Alice → Bob → Carol) succeeds. Same fix as in 10-iou.mjs.
+  await runTest('Bob sets his HighLimit on Carol USD trust line', async () => {
+    if (!carol) throw new Error('No carol from prior test');
+    const tx = new TrustSetTx({
+      Account:     bob.classicAddress,
+      LimitAmount: ica('USD', carol.classicAddress, '50000'),
+    });
+    tx.validate();
+    assertSuccess(await submitTx(client, tx, bob));
+  });
+
   await runTest('Bob issues 10 000 USD to Alice', async () => {
     const tx = new PaymentTx({
       Account:     bob.classicAddress,

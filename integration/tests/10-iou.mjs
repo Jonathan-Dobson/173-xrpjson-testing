@@ -41,6 +41,20 @@ export async function run(client, alice, bob) {
   const { runTest, summary } = createRunner();
   console.log('[10] IOU — trust lines, freeze, NoRipple, cross-currency, clawback');
 
+  // Reset Bob's AccountSet state from the shared [2] suite (TransferRate,
+  // TickSize). Without this, rippling tests in [10] can fail because the
+  // shared Bob's TransferRate applies a fee to holders moving his
+  // issuances.
+  await runTest('reset Bob TransferRate/TickSize from [2] AccountSet', async () => {
+    const tx = new AccountSetTx({
+      Account:    bob.classicAddress,
+      TransferRate: 0,    // clear the 0.5% fee [2] set
+      TickSize:    0,    // clear TickSize
+    });
+    tx.validate();
+    assertSuccess(await submitTx(client, tx, bob));
+  });
+
   // ── 1. Account-level flags on Bob — MUST come before any trust lines ─────
   // asfAllowTrustLineClawback: once set, cannot be unset; requires zero trust lines
   // asfDefaultRipple: lets payments ripple through Bob (needed for cross-currency)

@@ -109,7 +109,59 @@ The freeze/unfreeze pattern should preserve the issuer's HighLimit.
 
 **Status:** ✅ Fixed.
 
-### Bug #S3 — `xrpjson.mjs` shim's reference comment is wrong
+### Bug #S3 — Bob's HighLimit on Carol trust line was 0
+
+**Files:** `integration/tests/10-iou.mjs`, `integration/tests/11-check-iou.mjs`
+
+**Bug:** When Carol opened her trust line to Bob (LimitAmount value=50000),
+only Carol's LowLimit was set. Bob's HighLimit on the Bob<->Carol trust
+line stayed at 0 (default). For rippling through Bob (Alice → Bob → Carol)
+to work, Bob's HighLimit on **both** sides (Alice-Bob and Bob-Carol) must
+be > 0.
+
+**Symptom:** `tecPATH_PARTIAL` on cross-currency payments and check-cashing
+flows that routed through Bob.
+
+**Fix:** Added a step at the start of [10] and [11] where Bob sets his
+HighLimit on the Carol trust line via `TrustSet` with `LimitAmount.issuer=carol`.
+
+**Status:** ✅ Fixed.
+
+### Bug #S4 — [3] TrustSet limits lower than [10] balance ceiling
+
+**File:** `integration/tests/03-trust-set.mjs`
+
+**Bug:** After my [10] reorder, [10] already set up USD/EUR trust lines
+with limit 50000 and issued 10000 USD + 4500 EUR to Alice. Then [3] ran
+TrustSet to update Alice's LowLimit to 10000 USD / 5000 EUR — but Alice
+already had 10000 USD, so the new limit was breached immediately. [4] then
+tried to issue 100 more USD (Alice balance would go to 10100 > 10000) and
+got `tecPATH_DRY`.
+
+**Fix:** Updated [3] to use `value: '50000'` for USD and `value: '10000'`
+for EUR (matching/exceeding [10]'s balance).
+
+**Status:** ✅ Fixed.
+
+### Bug #S5 — Bob's TransferRate from [2] blocks rippling in [10]
+
+**File:** `integration/tests/10-iou.mjs`
+
+**Bug:** [2] set `TransferRate: 1_005_000_000` (0.5% fee) on Bob. This fee
+applies to holders moving Bob's issuances. [10]'s cross-currency rippling
+tests (Alice → Bob → Carol) couldn't path through Bob because the fee
+made the effective amount insufficient.
+
+**Symptom:** `tecPATH_PARTIAL` on Alice → Carol rippling tests when run
+after [2] in the full suite (but NOT in standalone [10], where Bob had
+no AccountSet flags).
+
+**Fix:** Added a step at the start of [10] that resets Bob's TransferRate
+and TickSize to 0, undoing any state from [2].
+
+**Status:** ✅ Fixed.
+
+### Bug #S6 — `xrpjson.mjs` shim's reference comment is wrong
 
 **File:** `xrpjson.mjs`
 
@@ -168,10 +220,10 @@ The factories enforce invariants the xrpl.js class API misses. Highlights:
 ## Summary
 
 - **2 real bugs** in xrpjson found and fixed (v1.0.3, v1.0.4).
-- **3 test-scaffolding bugs** in 173-xrpjson-testing found and fixed.
+- **5 test-scaffolding bugs** in 173-xrpjson-testing found and fixed.
 - **Coverage expanded** from 7 (unit) + 11 (integration) test scenarios to:
   - 20 unit scenarios (test.mjs)
   - 322 generic factory contract scenarios (unit-generic-harness.mjs)
   - 236 per-family happy-path scenarios (unit-families.mjs)
-  - 68 integration scenarios (integration/run-all.mjs)
-  - **Total: 646 test scenarios across all 79 factories.**
+  - 70 integration scenarios (integration/run-all.mjs)
+  - **Total: 648 test scenarios across all 79 factories.**
