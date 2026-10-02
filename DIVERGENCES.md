@@ -299,7 +299,7 @@ accepted by the ledger, and that reusing the same ticket is rejected. The
 story documents the gap rather than working around it silently, so the test
 fails loudly if the shape ever changes.
 
-**Status:** 🟡 **Partially fixed — 2 of 79 factories done, not yet released.**
+**Status:** 🟡 **Partially fixed — 10 of 79 factories done, not yet released.**
 See "Progress" below. Severity: low for the six convenience fields, medium for
 `TicketSequence`.
 
@@ -308,16 +308,26 @@ applied **one family at a time**, proving the pattern before scaling it — a
 79-file refactor is a two-file revert when it goes wrong on family 1, and a
 79-file archaeology exercise when it goes wrong on family 79.
 
-Two families converted so far:
+Ten factories across five families converted so far:
 
-| Family | Change | Tests |
-|---|---|---|
-| `Payment` | `PaymentProps extends Omit<BaseTransactionFields, 'TransactionType' \| 'Flags'>`; `validateBaseTransaction` called after the Payment-specific checks | +12 |
-| `Ticket` | same, on `TicketCreateProps` | +6 |
+| Family | Factories | Change | Tests |
+|---|---|---|---|
+| `Payment` | `payment` | `Props extends Omit<BaseTransactionFields, 'TransactionType' \| 'Flags'>`; `validateBaseTransaction` called after the factory's own checks | +12 |
+| `Ticket` | `ticketCreate` | same | +6 |
+| `TrustSet` | `trustSet` | same, applied by codemod | +9 |
+| `Check` | `checkCreate`, `checkCash`, `checkCancel` | same | +27 |
+| `Escrow` | `escrowCreate`, `escrowFinish`, `escrowCancel` | same | +27 |
+| `AccountSet` | `accountSet` | same | +9 |
 
-`146-xrpjs` gates: tsc 0, lint 0, **2876 tests** (was 2858). The harness's own
-happy-path fixtures for both families were re-run against the new build and
-still construct, so the next dependency bump will not break this repo.
+Families 3–6 were applied by a codemod rather than by hand, and the result is
+byte-identical in shape to families 1–2. `146-xrpjs` gates: tsc 0, lint 0,
+**2948 tests** (was 2858). **Not one pre-existing test broke** — that is the
+actual evidence that the pattern generalises rather than merely type-checks.
+
+Forward-compat: the harness's all-79 happy-path fixtures were re-run against the
+newly built `dist` (imports rewritten to bypass `node_modules`) — **236/236 still
+construct**. The stricter validation does not reject any input the harness
+already considered valid, so a future `xrpjson` bump will not break this repo.
 
 **The `Omit` is load-bearing, not decoration.** Two reasons, both verified:
 
@@ -338,7 +348,7 @@ specific message, and the base check is the backstop for everything shared. A
 test pins it — `ticketCreate({TicketCount: 0})` must still say
 "TicketCount must be an integer from 1 to 250", not a generic base-field error.
 
-**What this changes for a user, concretely.** `payment` and `ticketCreate` now
+**What this changes for a user, concretely.** All ten converted factories now
 reject what `validateBaseTransaction` always meant to reject:
 
 ```
@@ -350,7 +360,7 @@ ticketCreate({ ..., TicketSequence: 42 }) -> builds  ← previously impossible
 
 `validateBaseTransaction` is no longer orphaned: it has its first real callers.
 
-**Still open:** the other 77 factories. And the 18 tests added here are family
+**Still open:** the other 69 factories. And the 90 tests added here are family
 scoped — they are not a claim about the package.
 
 ---

@@ -181,12 +181,14 @@ This project caused two xrpjson releases and guards a third:
   fields through, so all seven work if you cast past the type. `TicketSequence`
   is the practical case: `ticketCreate` works, but spending the ticket needs a
   hand-merge.
-  **Partial fix in `146-xrpjs`, 2 of 79 factories, not yet released.** `Payment`
-  and `Ticket` now extend
+  **Partial fix in `146-xrpjs`, 10 of 79 factories, not yet released.** Six
+  families (`Payment`, `Ticket`, `TrustSet`, `Check`, `Escrow`, `AccountSet`)
+  now extend
   `Omit<BaseTransactionFields, 'TransactionType' | 'Flags'>` and call
-  `validateBaseTransaction` last, with 18 new tests (2876 total, tsc/lint
-  clean). The family-by-family order proves the pattern before it scales;
-  `TicketSequence` is now a real capability instead of a hand-merge.
+  `validateBaseTransaction` last, with 90 new tests (2948 total, tsc/lint
+  clean, no pre-existing test broken). The family-by-family order proves the
+  pattern before it scales; `TicketSequence` is now a real capability instead of
+  a hand-merge.
 - **Bug #4 — withdrawn.** `factory()` / `factory(null)` do throw a raw
   `TypeError`, but the proposed fix cannot work: `require(props.Account, …)`
   dereferences at the call site, before a guard inside `require()` could run.
