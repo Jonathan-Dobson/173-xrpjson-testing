@@ -198,16 +198,38 @@ duplicated 79 times by hand; the seven they don't need are duplicated **zero**
 times, even though the type that owns all of them already exists and is already
 validated by `validateBaseTransaction`.
 
-**The validator is unreachable from the fp layer.** No fp factory *imports*
-`validation/base.js`:
+**The validator has no callers at all.** It is not merely unreachable from the
+fp layer — nothing in `src/` invokes it. Stripping comments out of the search
+leaves exactly one reference, the re-export:
 
 ```
-$ grep -rn "^import.*from '.*validation/base" src/fp/factories/*.ts | wc -l
-  0
+$ grep -rn "validateBaseTransaction" src/ --include=*.ts \
+    | grep -vE "^\S+:[0-9]+:\s*(\*|//)" \
+    | grep -v "^src/validation/base.ts"
+  src/validation/index.ts:1:export { validateBaseTransaction } from './base.js';
 ```
 
-(Four files mention `src/validation/base.ts`, but all four are JSDoc
-citations in comments, not imports.)
+Thirty-two files mention `src/validation/base.ts`; **every one is a JSDoc
+citation**, and most quote *xrpl.js's* `validateBaseTransaction` rather than
+calling the local one. So the finding is sharper than "the fp layer skips it":
+the function is fully written, fully correct, exported for consumers through
+`xrpjson/validation` — and the library itself never uses it.
+
+It is not a stub. It validates all seven of the fields above, including a rule
+no factory can ever reach:
+
+```ts
+// src/validation/base.ts:99-103
+if (tx['Delegate'] === tx['Account']) {
+  throw new ValidationError(
+    'Transaction: Account and Delegate addresses cannot be the same');
+}
+```
+
+Since no factory accepts `Delegate` at all, that check is provably dead from
+the public API. Demonstrated live in `integration/demos/bug5-base-fields/`: a caller can
+build `ammDeposit({ Delegate: <same as Account> })`, get a valid-looking frozen
+object, and meet the failure only at submission.
 
 **This is a type-surface and validation-coverage gap — NOT a runtime hole.**
 `buildFrozenTx` spreads the whole field set through:
@@ -221,6 +243,22 @@ So all seven fields work today at runtime; a caller just has to cast past the
 prop type. Verified: `TicketSequence: 42` survives construction, `toJSON()`,
 and `.with()`; `Memos` is already relied on by passing suite [1]. The cost is
 erased type safety and skipped validation, not an unusable transaction.
+
+**The type surface is where a consumer actually feels it.** Against the
+published `xrpjson@1.2.0`, `tsc` rejects three adjacent fields in the *same*
+object literal — two of which the factory does declare:
+
+```
+error TS2353: … 'TicketSequence' does not exist in type 'PaymentProps'.
+error TS2353: … 'Memos'          does not exist in type 'AmmDepositProps'.
+error TS2353: … 'SourceTag'      does not exist in type 'AmmDepositProps'.
+```
+
+`Fee` and `Sequence` on those same calls compile clean. That contrast is the
+defect: the compiler is the only guard, and it is pointing the wrong way.
+Runnable demonstration in `integration/demos/bug5-base-fields/` — `demo-bug5.mjs` shows
+the runtime half (garbage values accepted, then rejected by the shipped
+validator), `type-demo.ts` shows the compile-time half.
 
 **The one practically severe case is still `TicketSequence`.**
 `ticketCreate` is fully supported, but a ticketed standalone transaction must
@@ -664,7 +702,8 @@ starts returning `false`.
     `LastLedgerSequence`, `AccountTxnID`, `NetworkID`, `Delegate`,
     `TicketSequence`) are declared in `BaseTransactionFields` and validated by
     `validateBaseTransaction`, but appear in **0 of 79** factory prop types,
-    and the validator is unreachable from the fp layer. A type-surface and
+    and the validator is never called by anything in the package. A
+    type-surface and
     validation-coverage gap — **all seven work at runtime**; `TicketSequence`
     is the one with real user impact.
   - **Bug #4 (withdrawn)** — `factory()` / `factory(null)` throw `TypeError`.
