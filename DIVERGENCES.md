@@ -122,91 +122,135 @@ with numeric `0x00020000`, `PaymentFlags.tfPartialPayment`, and
 
 ---
 
-## Bug #4 — `factory()` / `factory(null)` throw TypeError, not ValidationError (OPEN)
+## Bug #4 — `factory()` / `factory(null)` throw TypeError, not ValidationError (WITHDRAWN)
 
 **Factories:** all 79
 
-**Bug:** Every factory dereferences `props.Account` before checking that
-`props` is an object. Calling with no argument, or with `null`, throws a raw
-`TypeError`:
+**Original claim:** every factory dereferences `props.Account` before checking
+that `props` is an object, so calling with no argument or `null` throws a raw
+`TypeError` rather than a `ValidationError`:
 
 ```
 factory()          → TypeError: Cannot read properties of undefined (reading 'Account')
 factory(null)      → TypeError: Cannot read properties of null (reading 'Account')
 ```
 
-This is **the same class of defect as Bug #3**, one layer down: a caller
-passing a missing or null argument still has their bad input reported as a
-library bug rather than a validation failure. The 1.1.0 fix corrected the two
-sites that were already past the dereference; the dereference itself was left
-alone, so all 79 factories still have this shape.
+**Why it is withdrawn.** The suggested fix cannot work where it was proposed.
+`require(props.Account, …)` dereferences **at the call site**, before `require`
+is ever entered, so a guard *inside* `require()` structurally cannot help. And
+there is no central wrapper to put the guard in: the 79 factories are
+independent, each doing its own dereference. Meanwhile TypeScript already
+rejects both `null` and a missing argument at compile time, so the only callers
+who can reach this are untyped ones passing obviously-bad input.
 
-**Reproduction:** `payment()`, `payment(null)` — or any other factory.
+Re-measured against Bug #3, which *was* real: Bug #3 was a bare `Error` thrown
+by working validation code, and the fix was to throw `ValidationError` from
+inside `require`. Different bug, different fixability.
 
-**Severity:** lower than Bug #3 in practice (a null argument is a louder
-caller bug than a `TickSize` of 16), but it defeats the same
-`instanceof ValidationError` contract, so it belongs in the same bucket.
+**Kept, not deleted** because the characterization tests in
+`tests/unit-error-contract.mjs` § 3 still pin the current behavior, and because
+the honest conclusion — "this is not fixable the way we first thought" — is
+worth recording so nobody re-files it.
 
-**Suggested fix upstream:** guard the entry of each factory (or a shared
-wrapper in `src/fp/shape.ts`) with a
-`require(isPlainObject(props), '<Name>: props must be an object')` check
-before any property access.
-
-**Tests added here:** characterization tests in
-`tests/unit-error-contract.mjs` § 3 that pin today's `TypeError` behavior.
-They are deliberately written to **fail loudly once upstream fixes this**,
-so the suite and this entry get updated together rather than drifting.
-
-**Status:** 🔴 Open upstream. Not reported yet.
+**Status:** ⚪ Withdrawn. Do not report upstream. If someone wants to revisit
+it, the only shape that works is a single wrapper every factory is routed
+through — a larger refactor than the defect justifies.
 
 ---
 
-## Bug #5 — No factory exposes `TicketSequence`, so tickets can't be spent (OPEN)
+## Bug #5 — Seven base transaction fields are missing from all 79 factory prop types (OPEN)
 
-**Factories:** all top-level factories (gap is systemic, not per-factory)
+**Factories:** all 79 (gap is systemic, not per-factory)
 
-**Bug:** `ticketCreate` is fully supported, but **no top-level factory can
-spend the ticket it creates.** A ticketed standalone transaction has to carry
-`Sequence: 0` and `TicketSequence: N`, and neither field is accepted by any
-exported factory's props.
+> **Scope note.** This entry was first written as "`TicketSequence` is missing,
+> so tickets can't be spent." Investigation showed that framing was both too
+> narrow and slightly wrong. The real finding is a **structural gap in the type
+> surface** that affects seven base fields — and it is *not* a runtime hole.
 
-Verified against the installed `xrpjson@1.1.0`:
+**The gap:** `src/types/base.ts` `BaseTransactionFields` (line 14) declares the
+common transaction fields, and `src/validation/base.ts:23` exports
+`validateBaseTransaction` to check them. But **none of the 79 fp factory prop
+interfaces redeclare those base fields** — every factory re-declares `Fee`,
+`Sequence`, and (usually) `Flags` by hand, and seven declared base fields
+appear nowhere:
 
 ```
-$ grep -l "TicketSequence" node_modules/xrpjson/dist/fp/factories/*.d.ts
-  → batch.d.ts only
+$ for f in Memos SourceTag LastLedgerSequence AccountTxnID NetworkID Delegate TicketSequence; do
+    printf '%-20s %s/79\n' "$f" "$(grep -lE "^[[:space:]]*$f\?:" src/fp/factories/*.ts | wc -l)"
+  done
+  Memos                0/79
+  SourceTag            0/79
+  LastLedgerSequence   0/79
+  AccountTxnID         0/79
+  NetworkID            0/79
+  Delegate             0/79
+  TicketSequence       0/79
+
+# controls, same command
+  Fee                  79/79
+  Sequence             79/79
+  Flags                63/79
+  Account              79/79   (required, so no `?`)
 ```
 
-`TicketSequence` appears in exactly two places in the whole package:
+So the inconsistency is: the three fields every factory happens to need are
+duplicated 79 times by hand; the seven they don't need are duplicated **zero**
+times, even though the type that owns all of them already exists and is already
+validated by `validateBaseTransaction`.
 
-1. `dist/types/base.d.ts:73` — an internal base type that no exported factory
-   uses.
-2. `dist/fp/factories/batch.d.ts` — for **inner** `RawTransactions` in a
-   `Batch`, which is a different transaction entirely.
+**The validator is unreachable from the fp layer.** No fp factory *imports*
+`validation/base.js`:
 
-So a user who creates tickets with `ticketCreate` has to merge
-`TicketSequence` into `toJSON()` by hand, outside the factory's validation:
+```
+$ grep -rn "^import.*from '.*validation/base" src/fp/factories/*.ts | wc -l
+  0
+```
+
+(Four files mention `src/validation/base.ts`, but all four are JSDoc
+citations in comments, not imports.)
+
+**This is a type-surface and validation-coverage gap — NOT a runtime hole.**
+`buildFrozenTx` spreads the whole field set through:
+
+```ts
+// src/fp/shape.ts:56
+const data = Object.freeze({ TransactionType: txType, ...fields });
+```
+
+So all seven fields work today at runtime; a caller just has to cast past the
+prop type. Verified: `TicketSequence: 42` survives construction, `toJSON()`,
+and `.with()`; `Memos` is already relied on by passing suite [1]. The cost is
+erased type safety and skipped validation, not an unusable transaction.
+
+**The one practically severe case is still `TicketSequence`.**
+`ticketCreate` is fully supported, but a ticketed standalone transaction must
+carry `Sequence: 0` and `TicketSequence: N`, so a user who creates tickets has
+to merge the field in by hand, outside the factory's validation:
 
 ```js
 const tx = payment({ Account, Destination, Amount });
 const ticketed = { ...tx.toJSON(), Sequence: 0, TicketSequence: 1 };
 ```
 
-That bypass is outside the validated path, so a caller gets none of the
-`Payment` factory's eager checking on a transaction the ledger will treat as
-ticketed.
+`TicketSequence` shows up in the built package in exactly two places:
+`dist/types/base.d.ts` (the internal base type) and `dist/fp/factories/batch.d.ts`
+(for **inner** `RawTransactions` of a `Batch` — a different transaction).
 
 **Canonical sources:**
 - xrpl.js `packages/xrpl/src/models/transactions/common.ts` — `TicketSequence`
   is part of the base transaction interface alongside `Sequence`.
-- xrpl.org `ticketcreate.md` — "Tickets are used to reserve a transaction
-  sequence number for a future transaction… The transaction that uses a ticket
-  sets `Sequence` to `0` and `TicketSequence` to the ticket's number."
+- xrpl.org `ticketcreate.md` — "The transaction that uses a ticket sets
+  `Sequence` to `0` and `TicketSequence` to the ticket's number."
 - rippled parses `TicketSequence` on any transaction type, not just `Batch`.
+- xrpjs' **own** `src/types/base.ts:14` — the interface already declares
+  `TicketSequence` (line 40 of that file). The library declares the field, then
+  drops it before the public API.
 
-**Same shape as Bug #2** — a required field missing from the factory's props
-rather than a wrong value in it. Bug #2 was `AccountSet.Account`; this is
-`TicketSequence` on every non-`Batch` factory.
+**Suggested fix upstream:** have each `<Name>Props` interface `extends`
+`BaseTransactionFields` instead of re-declaring `Fee`/`Sequence`/`Flags` by
+hand, and call `validateBaseTransaction` from the fp layer. That closes the
+type gap, removes 79 copies of the same three lines, and makes the existing
+validator reachable — one change instead of seven.
 
 **Tests added here:** ADM-11 in `integration/tests/13-account-admin.mjs`
 deliberately performs the hand-merge and asserts the resulting transaction is
@@ -214,7 +258,63 @@ accepted by the ledger, and that reusing the same ticket is rejected. The
 story documents the gap rather than working around it silently, so the test
 fails loudly if the shape ever changes.
 
-**Status:** 🔴 Open upstream. Not reported yet.
+**Status:** 🔴 Open upstream. Not reported yet. Severity: low for the six
+convenience fields, medium for `TicketSequence`.
+
+---
+
+## Bug #6 — `ammDeposit` performs no flag validation; `ammWithdraw` does (OPEN)
+
+**Factories:** `ammDeposit` (defective), `ammWithdraw` (correct — used as the control)
+
+**Bug:** The XRPL requires an `AMMDeposit` to carry **exactly one** deposit
+mode flag. `xrpjson`'s `ammWithdraw` implements that check carefully. `ammDeposit`
+implements **none of it** — it accepts an absent `Flags`, an explicit
+`undefined`, `Flags: 0`, and multiple conflicting mode flags, all silently.
+
+**The two factories should be identical here. They are not:**
+
+| | `amm-withdraw.ts` | `amm-deposit.ts` |
+|---|---|---|
+| mode-flag bit table | `AMM_WITHDRAW_FLAG_BITS` (line 114) | **none** |
+| mask | `AMM_WITHDRAW_FLAGS_MASK` (line 124) | **none** |
+| `popcount32` helper | yes (line 179) | **none** |
+| exactly-one check | line 294, `popcount32(...) !== 1` | **none** |
+| `Flags` referenced at all | 8 sites | 3 sites, all type-only |
+
+`grep -n "FLAG\|popcount\|Flags" src/fp/factories/amm-deposit.ts` returns only
+the import of `AMMDepositFlagsInterface` (line 71), the `Flags?` property in the
+props interface (line 99), and a JSDoc example (line 14). No validation.
+
+**Why this matters.** `ammDeposit` in xrpjs is already thorough about the things
+*it* owns (asset amounts, the two-asset path, min/max constraints). Skipping the
+one rule the spec states in the same imperative voice for both transactions is
+an oversight, not a policy decision. A caller who passes `Flags: 0` gets a
+transaction object that looks valid and fails at submission with an opaque
+`temMALFORMED`-class code, instead of an eager, named `ValidationError`.
+
+**Canonical sources:**
+- xrpl.org `ammdeposit.md:129` — "You must specify **exactly one** of these
+  flags, plus any [global flags](../common-fields.md#global-flags)."
+- xrpl.org `ammwithdraw.md:107` — byte-identical sentence. The rule is the same
+  for both transactions; only the flag list differs.
+
+**How this was found:** diffing sibling factories against each other rather
+than against the docs. `ammWithdraw` was written to spec and documents its own
+rule with the exact canonical sentence; reading `ammDeposit` next to it made
+the absence obvious in a way that reading `ammDeposit` alone did not. The
+technique is now taught in the `xrpl-tx-stories` skill — it is the highest-yield
+defect-finding move available and neither the docs nor the skill previously
+named it.
+
+**Suggested fix upstream:** lift the existing `ammWithdraw` flag machinery into
+a shared `validation/amm.ts` (`AMM_MODE_FLAG_BITS` + `MASK` + `popcount32`,
+parameterized by the flag enum) and call it from both factories. Fixes the
+defect and removes the duplication that let it through.
+
+**Status:** 🔴 Open upstream. Not reported yet. This is the best candidate so
+far to actually file — it is unambiguous, has a one-line canonical citation,
+affects a public API, and the fix is already written one directory over.
 
 ---
 
@@ -459,11 +559,22 @@ starts returning `false`.
 
 ## Summary
 
-- **3 real bugs** in xrpjson found — 2 fixed upstream (v1.0.3, v1.0.4),
-  1 fixed in v1.1.0, and **2 open**:
-  - `factory()` / `factory(null)` throw `TypeError` — Bug #4
-  - no factory exposes `TicketSequence`, so `ticketCreate` output is
-    unspendable through the API — Bug #5
+- **4 real bugs** in xrpjson found — 3 fixed upstream (v1.0.3, v1.0.4, v1.1.0),
+  **2 open**, 1 withdrawn:
+  - **Bug #6 (open)** — `ammDeposit` does no flag validation at all, while
+    `ammWithdraw` enforces the identical "exactly one" rule. **Strongest
+    candidate to actually file upstream.**
+  - **Bug #5 (open)** — 7 base fields (`Memos`, `SourceTag`,
+    `LastLedgerSequence`, `AccountTxnID`, `NetworkID`, `Delegate`,
+    `TicketSequence`) are declared in `BaseTransactionFields` and validated by
+    `validateBaseTransaction`, but appear in **0 of 79** factory prop types,
+    and the validator is unreachable from the fp layer. A type-surface and
+    validation-coverage gap — **all seven work at runtime**; `TicketSequence`
+    is the one with real user impact.
+  - **Bug #4 (withdrawn)** — `factory()` / `factory(null)` throw `TypeError`.
+    Re-measured and taken back: the proposed fix cannot work, because
+    `require(props.Account, …)` dereferences at the call site, before a guard
+    inside `require()` could run, and there is no central wrapper to hold one.
 - **5 + 2 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
   (S7 covers three ledger rules, S8 the NFT metadata extractors).
 - **Coverage expanded** from 7 (unit) + 11 (integration) test scenarios to:
@@ -486,11 +597,14 @@ which the [12] and [13] suites are written against.
 | v1.0.3 | `EscrowCreate` Ripple Epoch lower bound | integration suite [6] |
 | v1.0.4 | `AccountSet` did not require `Account` | `unit-generic-harness.mjs` |
 | v1.1.0 | `accountSet` TickSize + `payment` DeliverMin threw bare `Error` | upstream citation audit; guarded here by `unit-error-contract.mjs` |
-| *unreleased* | `factory()` / `factory(null)` throw `TypeError` | `unit-error-contract.mjs` § 3 |
-| *unreleased* | no factory exposes `TicketSequence` | suite [13], ADM-11 |
+| *unreleased* | `ammDeposit` accepts zero, one, or many mode flags | sibling-factory diff (`ammDeposit` vs `ammWithdraw`) |
+| *unreleased* | 7 base fields missing from all 79 factory prop types | suite [13], ADM-11, then widened by source audit |
+| *withdrawn* | `factory()` / `factory(null)` throw `TypeError` | `unit-error-contract.mjs` § 3 — not fixable as proposed |
 
-No *new* xrpjson defect was found by suites [12] and [13]. All 8 factories
-they exercise behaved per spec against a live ledger; the three failures the
-suites hit while being written (S7) were bugs in the tests' understanding of
-ledger rules, not in the package. That is a different result from suites
-[6] and the generic harness, and worth recording as such.
+Suites [12] and [13] found **no new xrpjson defect among the 8 factories they
+exercise**; all behaved per spec against a live ledger, and the three failures
+hit while writing them (S7) were bugs in the tests' understanding of ledger
+rules. Bugs #5 and #6 both came from *reading the source*, not from running
+transactions — which is a finding about this project's method, and the reason
+the `xrpl-tx-stories` skill now teaches source-reading and sibling diffing as
+first-class moves.

@@ -156,8 +156,25 @@ This project caused two xrpjson releases and guards a third:
   upstream via its citation audit; `tests/unit-error-contract.mjs` guards
   it here.
 
-**Open finding:** `factory()` and `factory(null)` still throw a raw
-`TypeError` across all 79 factories — the same class of defect as the 1.1.0
-fix, one layer down. Tracked as Bug #4 in [DIVERGENCES.md](./DIVERGENCES.md).
+**Open findings** (all unreported upstream):
+
+- **Bug #6 — `ammDeposit` does no flag validation at all.** Its sibling
+  `ammWithdraw` enforces the spec's "specify exactly one of these flags" rule
+  with a bit table, mask, and `popcount` check; `ammDeposit` has none of it and
+  silently accepts zero, one, or many mode flags. Found by diffing the two
+  sibling factories. This is the best candidate to actually file — unambiguous,
+  one-line canonical citation, and the fix already exists one directory over.
+- **Bug #5 — 7 base transaction fields appear in 0 of 79 factory prop types.**
+  `Memos`, `SourceTag`, `LastLedgerSequence`, `AccountTxnID`, `NetworkID`,
+  `Delegate`, and `TicketSequence` are declared in `BaseTransactionFields` and
+  validated by `validateBaseTransaction`, but no fp factory re-declares them and
+  none imports that validator. Not a runtime hole — `buildFrozenTx` spreads
+  fields through, so all seven work if you cast past the type. `TicketSequence`
+  is the practical case: `ticketCreate` works, but spending the ticket needs a
+  hand-merge.
+- **Bug #4 — withdrawn.** `factory()` / `factory(null)` do throw a raw
+  `TypeError`, but the proposed fix cannot work: `require(props.Account, …)`
+  dereferences at the call site, before a guard inside `require()` could run.
+  Kept in the error-contract suite as a characterization test; not worth filing.
 
 See [DIVERGENCES.md](./DIVERGENCES.md) for full details.
