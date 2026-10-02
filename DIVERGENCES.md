@@ -263,7 +263,7 @@ convenience fields, medium for `TicketSequence`.
 
 ---
 
-## Bug #6 — `ammDeposit` performs no flag validation; `ammWithdraw` does (OPEN)
+## Bug #6 — `ammDeposit` performs no flag validation; `ammWithdraw` does (FIXED in v1.2.0, verified live)
 
 **Factories:** `ammDeposit` (defective), `ammWithdraw` (correct — used as the control)
 
@@ -299,11 +299,18 @@ transaction object that looks valid and fails at submission with an opaque
 - xrpl.org `ammwithdraw.md:107` — byte-identical sentence. The rule is the same
   for both transactions; only the flag list differs.
 
-**How this was found:** diffing sibling factories against each other rather
-than against the docs. `ammWithdraw` was written to spec and documents its own
-rule with the exact canonical sentence; reading `ammDeposit` next to it made
-the absence obvious in a way that reading `ammDeposit` alone did not. The
-technique is now taught in the `xrpl-tx-stories` skill — it is the highest-yield
+**Status:** 🟢 **Fixed in v1.2.0.** Verified against a live ledger by suite
+[14] (`integration/tests/14-amm-deposit-flags.mjs`) — rippled answers
+`temMALFORMED` for both the zero-flag and two-flag cases, matching the
+`popcount(flags & tfDepositSubTx) != 1` check the fix implements. The factory
+half is covered by 45 unit tests in `146-xrpjs`; the ledger half can only be
+settled against a network, which is why suite [14] exists.
+
+**Found by:** diffing sibling factories against each other rather than against
+the docs. `ammWithdraw` was written to spec and documents its own rule with the
+exact canonical sentence; reading `ammDeposit` next to it made the absence
+obvious in a way that reading `ammDeposit` alone did not. The technique is now
+taught as §1a of the `xrpl-tx-stories` skill — it is the highest-yield
 defect-finding move available and neither the docs nor the skill previously
 named it.
 
@@ -312,9 +319,64 @@ a shared `validation/amm.ts` (`AMM_MODE_FLAG_BITS` + `MASK` + `popcount32`,
 parameterized by the flag enum) and call it from both factories. Fixes the
 defect and removes the duplication that let it through.
 
-**Status:** 🔴 Open upstream. Not reported yet. This is the best candidate so
-far to actually file — it is unambiguous, has a one-line canonical citation,
-affects a public API, and the fix is already written one directory over.
+---
+
+## Bug #7 — AMM factories check flag *cardinality* but not flag *membership* (FIXED in v1.2.0)
+
+**Factories:** `ammDeposit` and `ammWithdraw` (both affected)
+
+**Found by:** the live verification commissioned for Bug #6. Fixing Bug #6
+made the ledger disagree with the factory in a case the factory had never been
+asked about, and the disagreement is a second, independent rule.
+
+**The rule.** rippled applies **two** checks to `AMMDeposit` flags, in order:
+
+1. **Membership** — `getFlagsMask` returns `tfAMMDepositMask`, built by
+   `TO_MASK` as `~(tfUniversal | <the six deposit flags>)`
+   (`TxFlags.h:264-266`, `169-176`). `tfUniversal` is only
+   `tfFullyCanonicalSig | tfInnerBatchTxn` (`TxFlags.h:43-46`). Any *other* bit
+   set in `Flags` is not in the mask → **`temINVALID_FLAG`**.
+2. **Cardinality** — `preflight` runs
+   `std::popcount(flags & tfDepositSubTx) != 1` → **`temMALFORMED`**
+   (`AMMDeposit.cpp:72`).
+
+xrpjson implements only step 2, in both AMM factories. So a bit belonging to a
+*different* transaction type is silently tolerated at construction and refused
+only at the ledger.
+
+**Observed live** (suite [14], AMM-5, testnet ledger 21219576):
+
+| `Flags` | factory | ledger |
+|---|---|---|
+| `tfSingleAsset` (0x00080000) | accepts | passes both checks → `temBAD_AMM_TOKENS` |
+| `tfSingleAsset \| tfTwoAsset` | rejects | `temMALFORMED` |
+| no `Flags` | rejects | `temMALFORMED` |
+| `tfSingleAsset \| tfWithdrawAll` (0x00020000) | **accepts** | **`temINVALID_FLAG`** |
+| `tfSingleAsset \| 0x00000002` | accepts | `temINVALID_FLAG` |
+
+The distinct result codes are the evidence: `temINVALID_FLAG` is a *different*
+check from `temMALFORMED`, so the ledger refused the membership question, not
+the cardinality one. A caller who trusts the factory to have caught a bad flag
+gets a transaction object that cannot be submitted.
+
+**Why this is smaller than Bug #6:** it needs the caller to have combined a
+flag from the wrong transaction type, which is rarer than forgetting the flag
+altogether. But it is the same shape — the factory answers a question about
+flags that only the ledger can fully answer, and answers it incompletely.
+
+**Tests added here:** suite [14] AMM-5 asserts the ledger's side, so the
+divergence cannot be quietly closed without also fixing the factory. The
+`amm-deposit.test.ts` case "ignores a withdraw-only bit when counting deposit
+modes" pins the factory's *current* behaviour deliberately, and says so in a
+comment, so the pair reads as a known gap rather than a passing test.
+
+**Status:** 🟢 **Fixed in v1.2.0**, alongside Bug #6. Both factories now build
+the same validity mask rippled uses —
+`UNIVERSAL_FLAGS | AMM_*_FLAGS_MASK` — and reject any bit outside it *before*
+the cardinality check. `tfFullyCanonicalSig` and `tfInnerBatchTxn` stay legal
+because they are in `tfUniversal`. 6 new unit tests; suite [14]'s AMM-5 will go
+from documenting a gap to agreeing with the factory once 1.2.0 is published
+here.
 
 ---
 
@@ -559,11 +621,8 @@ starts returning `false`.
 
 ## Summary
 
-- **4 real bugs** in xrpjson found — 3 fixed upstream (v1.0.3, v1.0.4, v1.1.0),
-  **2 open**, 1 withdrawn:
-  - **Bug #6 (open)** — `ammDeposit` does no flag validation at all, while
-    `ammWithdraw` enforces the identical "exactly one" rule. **Strongest
-    candidate to actually file upstream.**
+- **5 real bugs** in xrpjson found — 5 fixed upstream (v1.0.3, v1.0.4, v1.1.0,
+  v1.2.0), 1 withdrawn:
   - **Bug #5 (open)** — 7 base fields (`Memos`, `SourceTag`,
     `LastLedgerSequence`, `AccountTxnID`, `NetworkID`, `Delegate`,
     `TicketSequence`) are declared in `BaseTransactionFields` and validated by
@@ -575,6 +634,9 @@ starts returning `false`.
     Re-measured and taken back: the proposed fix cannot work, because
     `require(props.Account, …)` dereferences at the call site, before a guard
     inside `require()` could run, and there is no central wrapper to hold one.
+- **Fixed by this project:** Bugs #1, #2, #3 (v1.0.3 / v1.0.4 / v1.1.0) and
+  **#6 and #7 (v1.2.0)** — the latter two verified against a live ledger by
+  suite [14].
 - **5 + 2 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
   (S7 covers three ledger rules, S8 the NFT metadata extractors).
 - **Coverage expanded** from 7 (unit) + 11 (integration) test scenarios to:
@@ -585,10 +647,11 @@ starts returning `false`.
   - 70 integration scenarios, suites [1]–[11] (integration/run-all.mjs)
   - 18 integration scenarios, suite [12] NFT lifecycle
   - 23 integration scenarios, suite [13] account admin
-  - **Total: 719 test scenarios across all 79 factories.**
+  - 5 live-ledger scenarios, suite [14] AMM deposit flags
+  - **Total: 724 test scenarios across all 79 factories.**
 
 New user stories are specified in [USER-STORIES.md](./USER-STORIES.md),
-which the [12] and [13] suites are written against.
+which the [12], [13] and [14] suites are written against.
 
 ### xrpjson release history driven by this project
 
@@ -597,14 +660,14 @@ which the [12] and [13] suites are written against.
 | v1.0.3 | `EscrowCreate` Ripple Epoch lower bound | integration suite [6] |
 | v1.0.4 | `AccountSet` did not require `Account` | `unit-generic-harness.mjs` |
 | v1.1.0 | `accountSet` TickSize + `payment` DeliverMin threw bare `Error` | upstream citation audit; guarded here by `unit-error-contract.mjs` |
-| *unreleased* | `ammDeposit` accepts zero, one, or many mode flags | sibling-factory diff (`ammDeposit` vs `ammWithdraw`) |
+| v1.2.0 | `ammDeposit` enforced no mode-flag rule at all; AMM factories didn't validate flag membership | sibling-factory diff, then verified live by suite [14] |
 | *unreleased* | 7 base fields missing from all 79 factory prop types | suite [13], ADM-11, then widened by source audit |
 | *withdrawn* | `factory()` / `factory(null)` throw `TypeError` | `unit-error-contract.mjs` § 3 — not fixable as proposed |
 
 Suites [12] and [13] found **no new xrpjson defect among the 8 factories they
 exercise**; all behaved per spec against a live ledger, and the three failures
 hit while writing them (S7) were bugs in the tests' understanding of ledger
-rules. Bugs #5 and #6 both came from *reading the source*, not from running
-transactions — which is a finding about this project's method, and the reason
-the `xrpl-tx-stories` skill now teaches source-reading and sibling diffing as
+rules. Bugs #5, #6 and #7 came from *reading the source* and from suite [14] —
+which is a finding about this project's method, and the reason the
+`xrpl-tx-stories` skill now teaches source-reading and sibling diffing as
 first-class moves.

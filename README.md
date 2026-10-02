@@ -76,21 +76,23 @@ requirement (see [DIVERGENCES.md](./DIVERGENCES.md) Bug #S7).
 └── USER-STORIES.md
 ```
 
-Suites [12] and [13] are specified in [USER-STORIES.md](./USER-STORIES.md) —
+Suites [12], [13] and [14] are specified in [USER-STORIES.md](./USER-STORIES.md) —
 the tests are written against those stories, so the document is the intent
 and the test is the bug when they disagree.
 
 `13-account-admin.mjs` **must run last**. It mutates Alice's signing setup
 (regular key, then signer list) and finally deletes a throwaway account;
 `AccountDelete` only succeeds once the regular key and signer list are gone,
-so `run-all.mjs` schedules it at the end.
+so `run-all.mjs` schedules it at the end. Suite `14-amm-deposit-flags.mjs` is
+self-contained and non-destructive — it creates no AMM, because the AMMDeposit
+flag check is a *preflight* check that runs before any pool state is read.
 
 ## Coverage matrix
 
 | Family | Factories | Unit | Integration |
 |---|---|---|---|
 | Account | `accountDelete`, `accountSet` | ✓ generic + happy | ✓ `02-account-set`, `13` (delete) |
-| AMM (7) | `ammBid`, `ammClawback`, `ammCreate`, `ammDelete`, `ammDeposit`, `ammVote`, `ammWithdraw` | ✓ generic + happy | `ammCreate` only |
+| AMM (7) | `ammBid`, `ammClawback`, `ammCreate`, `ammDelete`, `ammDeposit`, `ammVote`, `ammWithdraw` | ✓ generic + happy | `ammCreate` only; `14` covers `ammDeposit` flag contract |
 | Batch | `batch` | ✓ | — |
 | Check (3) | `checkCancel`, `checkCash`, `checkCreate` | ✓ | ✓ `07-check`, `11-check-iou` |
 | Clawback | `clawback` | ✓ | ✓ in `10-iou` |
@@ -156,14 +158,8 @@ This project caused two xrpjson releases and guards a third:
   upstream via its citation audit; `tests/unit-error-contract.mjs` guards
   it here.
 
-**Open findings** (all unreported upstream):
+**Open finding:**
 
-- **Bug #6 — `ammDeposit` does no flag validation at all.** Its sibling
-  `ammWithdraw` enforces the spec's "specify exactly one of these flags" rule
-  with a bit table, mask, and `popcount` check; `ammDeposit` has none of it and
-  silently accepts zero, one, or many mode flags. Found by diffing the two
-  sibling factories. This is the best candidate to actually file — unambiguous,
-  one-line canonical citation, and the fix already exists one directory over.
 - **Bug #5 — 7 base transaction fields appear in 0 of 79 factory prop types.**
   `Memos`, `SourceTag`, `LastLedgerSequence`, `AccountTxnID`, `NetworkID`,
   `Delegate`, and `TicketSequence` are declared in `BaseTransactionFields` and
@@ -176,5 +172,13 @@ This project caused two xrpjson releases and guards a third:
   `TypeError`, but the proposed fix cannot work: `require(props.Account, …)`
   dereferences at the call site, before a guard inside `require()` could run.
   Kept in the error-contract suite as a characterization test; not worth filing.
+
+**Fixed by this project:** Bug #6 — `ammDeposit` enforced no mode-flag rule at
+all while `ammWithdraw` enforced the identical one — and **Bug #7**, where both
+AMM factories checked flag *cardinality* ("exactly one mode") but not flag
+*membership* ("every bit must be legal for this transaction type"). So
+`Flags: tfSingleAsset | tfWithdrawAll` was accepted by the factory and refused
+by the ledger with `temINVALID_FLAG`. Both fixed in v1.2.0 and verified against
+a live ledger by suite [14].
 
 See [DIVERGENCES.md](./DIVERGENCES.md) for full details.

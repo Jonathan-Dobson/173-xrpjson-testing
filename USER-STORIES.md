@@ -553,15 +553,180 @@ missing guard as an oversight — but it is worth stating explicitly.
 
 ---
 
+# [14] AMM deposit flag contract
+
+This section exists to verify one specific rule against the live ledger:
+**an `AMMDeposit` must carry exactly one deposit-mode flag.** It is the first
+live check of the fix for [DIVERGENCES.md](./DIVERGENCES.md) Bug #6, where
+`ammDeposit` previously performed no flag validation at all while its sibling
+`ammWithdraw` enforced the identical rule.
+
+## The contract, from source
+
+rippled applies **two independent checks** to `AMMDeposit` flags, in this order:
+
+1. **Membership** — `AMMDeposit::getFlagsMask` returns `tfAMMDepositMask`,
+   built by `TO_MASK` as `~(tfUniversal | <six deposit flags>)` (`TxFlags.h`
+   lines 264-266, 169-176). `tfUniversal` is only `tfFullyCanonicalSig |
+   tfInnerBatchTxn` (lines 43-46). Any *other* bit set in `Flags` is not in
+   the mask, and the whole transaction is refused with `temINVALID_FLAG`.
+2. **Cardinality** — `AMMDeposit::preflight` runs
+   `std::popcount(flags & tfDepositSubTx) != 1` → `temMALFORMED`
+   (`AMMDeposit.cpp:72`), where `tfDepositSubTx` is the six deposit bits
+   (`TxFlags.h:409-410`).
+
+The mask is **sparse**: `0x00020000` (`tfWithdrawAll`) and `0x00040000`
+(`tfOneAssetWithdrawAll`) are `AMMWithdraw` modes, so they are absent from
+`tfDepositSubTx`. A naive `popcount(Flags)` would miscount a withdraw bit as
+a second deposit mode. That is why the fixed factory masks before counting.
+
+xrpl.org `ammdeposit.md:129` states the same rule in the same words as
+`ammwithdraw.md:107`: "You must specify **exactly one** of these flags, plus
+any global flags."
+
+The six deposit modes, from `TxFlags.h:169-176` (identical to the xrpjson
+`AMMDepositFlags` enum and to xrpl.js's):
+
+| Flag | Hex | Mode |
+|---|---|---|
+| `tfLPToken` | `0x00010000` | double-asset deposit for a specified LP amount |
+| `tfSingleAsset` | `0x00080000` | single-asset deposit with a specified amount |
+| `tfTwoAsset` | `0x00100000` | double-asset deposit with both amounts |
+| `tfOneAssetLPToken` | `0x00200000` | single-asset deposit for a specified LP amount |
+| `tfLimitLPToken` | `0x00400000` | single-asset deposit at a specified effective price |
+| `tfTwoAssetIfEmpty` | `0x00800000` | special deposit into an empty pool |
+
+## AMM-1 — The ledger refuses a deposit with no mode flag
+
+> **Story.** As a caller who has lost track of the flags, I want the ledger to
+> reject my deposit immediately and say so, rather than accepting a transaction
+> whose meaning is undefined.
+
+**Acceptance.** An `AMMDeposit` submitted with `Flags` absent is rejected with
+`temMALFORMED`.
+
+## AMM-2 — The ledger refuses a deposit with two mode flags
+
+> **Story.** As a caller combining options by mistake, I want the ambiguous
+> deposit refused rather than silently resolved to one of the two modes.
+
+**Acceptance.** `Flags: tfSingleAsset | tfTwoAsset` is rejected with
+`temMALFORMED`.
+
+## AMM-3 — Exactly one mode flag passes the flag check
+
+> **Story.** As a caller who set the flag correctly, I want to be sure the flag
+> is actually *read* by the ledger rather than ignored, so that a transaction
+> rejected for an unrelated reason still proves the flag was honoured.
+
+**Acceptance.** `Flags: tfSingleAsset` is **not** rejected as malformed or
+flagged. It proceeds past both flag checks and fails later, on the deposit's
+own terms — observed as `temBAD_AMM_TOKENS` with no AMM present.
+
+> Asserting the *specific* later code is deliberately loose. The point of this
+> story is that the flag check passed, not what the deposit validation said.
+> Pinning `temBAD_AMM_TOKENS` would make the test fail the moment rippled
+> improves that message without any change to the rule under test.
+
+## AMM-4 — A universal flag does not count toward the mode count
+
+> **Story.** As a caller who always sets `tfFullyCanonicalSig`, I want that flag
+> to be compatible with a normal deposit rather than being miscounted as a
+> second mode.
+
+**Acceptance.** `Flags: tfSingleAsset | tfFullyCanonicalSig` passes both flag
+checks. `tfFullyCanonicalSig` is `0x80000000` and is in `tfUniversal`
+(`TxFlags.h:43`), so the ledger must permit it. Assert the *permitted* half;
+the forbidden half (a bit outside the mask) is AMM-5.
+
+> ⚠️ **Implementation trap, found the hard way.** `0x80000000` does not fit a
+> *signed* 32-bit integer, so `0x00080000 | 0x80000000` evaluates to a
+> **negative** number in JavaScript. xrpl.js then refuses to serialise the
+> transaction and throws a client-side error before anything reaches the
+> ledger. The first version of this test passed anyway, because it only
+> asserted "not temMALFORMED, not temINVALID_FLAG" — and a client-side error
+> satisfies both. Compose such a value with `>>> 0`, and have the helper
+> return client-side failures under a distinct prefix so they can never be
+> read as the ledger accepting something.
+
+## AMM-5 — A flag from another transaction type is refused
+
+> **Story.** As a caller reusing a flags constant from the wrong transaction, I
+> want the ledger to refuse it rather than treat the unknown bit as a mode.
+
+**Acceptance.** `Flags: tfSingleAsset | tfWithdrawAll` (`0x00020000`) is
+rejected with `temINVALID_FLAG` — **not** `temMALFORMED`. That distinct code is
+the evidence that the membership check ran and failed, which is a different
+check from the cardinality one.
+
+> ⚠️ **This is where the factory and the ledger disagree.** The fixed
+> `ammDeposit` implements only the *cardinality* check, so it accepts this
+> combination; the ledger refuses it. Tracked as Bug #7 in
+> [DIVERGENCES.md](./DIVERGENCES.md). The unit test pins the factory's current
+> behaviour deliberately; this story records the ledger's.
+
+## Setup note — no AMM is required
+
+The flag check is **preflight**, so it runs before any AMM state is consulted.
+Every story above is therefore decided without creating a pool, funding an
+issuer, or building a trust line. That is a property of the rule, not a
+shortcut: it is precisely what makes the failure cheap to detect and cheap to
+test.
+
+Creating a real AMM and completing a deposit is *not* covered here. It would
+prove the ledger accepts a well-formed deposit, but it is expensive setup
+(AMMCreate charges an owner reserve, and a two-asset pool needs an issued
+currency) for a fact the AMM amendment documentation already states. AMM-3's
+loose assertion is the honest version of "the ledger got far enough to care
+about the deposit's contents".
+
+## Sources
+
+- rippled `src/libxrpl/tx/transactors/dex/AMMDeposit.cpp:51-75` — both checks
+- rippled `src/libxrpl/protocol/TxFlags.h:43-46, 169-176, 264-266, 407-410`
+- xrpl.org `ammdeposit.md:120-129`; `ammwithdraw.md:107`
+- xrpl.js `packages/xrpl/src/models/transactions/AMMDeposit.ts:18-34`
+- Testnet `feature` command: `AMM` reported `enabled=true, supported=true`
+
+## Observed on testnet (ledger 21219576)
+
+| Story | `Flags` | Ledger result |
+|---|---|---|
+| AMM-1 | absent | `temMALFORMED` |
+| AMM-2 | `tfSingleAsset \| tfTwoAsset` | `temMALFORMED` |
+| AMM-3 | `tfSingleAsset` | `temBAD_AMM_TOKENS` — flag check passed |
+| AMM-4 | `tfSingleAsset \| tfFullyCanonicalSig` | `temBAD_AMM_TOKENS` — flag check passed |
+| AMM-5 | `tfSingleAsset \| tfWithdrawAll` | `temINVALID_FLAG` |
+
+Every prediction from rippled's source held. AMM-3 and AMM-4 reach the same
+later failure, which is the point: the flag check let them through and the
+deposit validation is what stopped them, with no AMM present.
+
+Two more shapes were probed and are **not** asserted, because both are
+artefacts of how the transaction was built rather than statements about the
+rule:
+
+- `Flags: 0` returned `temBAD_SIGNATURE`. Zero is a valid `Flags` value, so
+  this is not the flag rule speaking; it appears to be an interaction with
+  client-side autofill. Unresolved and deliberately left out.
+- `Flags: 0x00000002` returned `temINVALID_FLAG`. Correct behaviour — `0x2` is
+  not a legal AMMDeposit flag — but the story for it is AMM-5, which uses a bit
+  that is meaningful elsewhere and therefore tests membership rather than
+  nonsense.
+
+---
+
 # Running the suites
 
 ```bash
 npm run test:integration                          # everything, in order
 node integration/tests/12-nft-lifecycle.mjs       # standalone, funds its own wallets
 node integration/tests/13-account-admin.mjs       # standalone, funds its own wallets
+node integration/tests/14-amm-deposit-flags.mjs   # standalone, funds its own wallet
 ```
 
-Both suites fund their own extra wallets (buyer, broker, throwaway) through
-the faucet, so neither depends on another suite having run first. They do share
+Suites [12] and [13] fund their own extra wallets (buyer, broker, throwaway)
+through the faucet, so neither depends on another suite having run first. Suite
+[14] is self-contained: it funds one wallet and needs no AMM. All three share
 Alice and Bob with the rest of the integration run, so run them **last** —
 `AccountDelete` in particular should never be pointed at a shared wallet.
