@@ -18,7 +18,7 @@ has found in xrpjson (and the test scaffolding fixes that surfaced them).
 ## Setup
 
 ```bash
-npm install   # installs xrpjson@^1.1.0 + xrpl@^4.6.0
+npm install   # installs xrpjson@^1.2.0 + xrpl@^4.6.0
 ```
 
 > **Sandbox note:** if `npm install` fails with `EPERM ... unlink` under
@@ -157,6 +157,13 @@ This project caused two xrpjson releases and guards a third:
   instead of a bare `Error`, matching the other 729 throw sites. Found
   upstream via its citation audit; `tests/unit-error-contract.mjs` guards
   it here.
+- **v1.2.0** (2026-10-02): `ammDeposit` now enforces the "exactly one
+  deposit-mode flag" rule its sibling `ammWithdraw` already did, and both
+  AMM factories now validate flag *membership* (every set bit must be legal
+  for the transaction type) as well as *cardinality* — Bugs #6 and #7. Found
+  by diffing sibling factories, then verified against a live ledger by suite
+  [14]. **Behaviour change:** `ammDeposit` now throws on input it previously
+  accepted.
 
 **Open finding:**
 

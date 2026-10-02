@@ -235,6 +235,9 @@ const ticketed = { ...tx.toJSON(), Sequence: 0, TicketSequence: 1 };
 `TicketSequence` shows up in the built package in exactly two places:
 `dist/types/base.d.ts` (the internal base type) and `dist/fp/factories/batch.d.ts`
 (for **inner** `RawTransactions` of a `Batch` — a different transaction).
+Re-checked against `xrpjson@1.2.0`: all seven fields are still **0 of 79**, and
+`batch.d.ts` is still the only factory file that mentions it. The gap did not
+close in 1.2.0.
 
 **Canonical sources:**
 - xrpl.js `packages/xrpl/src/models/transactions/common.ts` — `TicketSequence`
@@ -442,6 +445,40 @@ the offer index. `extractOfferIndex` reads `CreatedNode.LedgerIndex` instead.
 **Status:** ✅ Fixed. Three purpose-named extractors now exist rather than one
 overloaded one.
 
+### Bug #S9 — The `ammDeposit` happy-path fixture omitted a mandatory flag
+
+**File:** `tests/unit-families.mjs`
+
+**Found by:** upgrading this harness to `xrpjson@1.2.0`, which is the honest
+answer to "what breaks when a library fix actually lands." Three tests failed on
+the install, not on a code change:
+
+```
+✗ ammDeposit — constructs and freezes with minimal input
+✗ ammDeposit — toJSON() returns canonical wire shape
+✗ ammDeposit — with({ Fee: '12' }) returns a new frozen object
+  AMMDeposit: Flags must specify exactly one AMM-deposit mode flag
+```
+
+**Classification: test-scaffolding defect, not a library defect.** The library
+is right and the fixture was wrong. `checkFactory` built `ammDeposit` from
+`Account`, `Asset`, `Asset2`, and `Amount` with no `Flags` — an input the spec
+has never permitted. The fixture only passed because the factory used to accept
+it, so the test was asserting the *bug* (Bug #6) rather than the contract.
+
+**Fix:** added `Flags: 0x00080000` (`tfSingleAsset`) to the fixture, with a
+comment citing `ammdeposit.md:129` and rippled's preflight. Not weakened: the
+tests still assert the same three properties, just against a valid transaction.
+
+**Why it is worth recording.** This is the failure mode the whole project is
+built to avoid, appearing in the project's own harness. A happy-path fixture
+that constructs the *minimum the library accepts* is not testing the spec — it
+is testing whatever the library happens to tolerate. When a library gets
+stricter, that fixture fails, and the instinct to "fix" it by loosening the new
+check is exactly backwards. Suite [14] is the deliberate counterweight: it pins
+the rule from the ledger side so a future loosening has something to fail
+against.
+
 ### Bug #S1 — Integration test ordering for [10] IOU
 
 **File:** `integration/run-all.mjs`
@@ -637,8 +674,9 @@ starts returning `false`.
 - **Fixed by this project:** Bugs #1, #2, #3 (v1.0.3 / v1.0.4 / v1.1.0) and
   **#6 and #7 (v1.2.0)** — the latter two verified against a live ledger by
   suite [14].
-- **5 + 2 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
-  (S7 covers three ledger rules, S8 the NFT metadata extractors).
+- **5 + 3 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
+  (S7 covers three ledger rules, S8 the NFT metadata extractors, S9 a happy-path
+  fixture that was asserting a library bug).
 - **Coverage expanded** from 7 (unit) + 11 (integration) test scenarios to:
   - 20 unit scenarios (test.mjs)
   - 322 generic factory contract scenarios (unit-generic-harness.mjs)
@@ -648,7 +686,9 @@ starts returning `false`.
   - 18 integration scenarios, suite [12] NFT lifecycle
   - 23 integration scenarios, suite [13] account admin
   - 5 live-ledger scenarios, suite [14] AMM deposit flags
-  - **Total: 724 test scenarios across all 79 factories.**
+  - **Total: 726 test scenarios across all 79 factories.** (Suite [14] runs 7
+    checks; 5 are ledger-level, 2 assert the installed factory agrees. Both
+    halves are active as of `xrpjson@1.2.0` — earlier they skipped.)
 
 New user stories are specified in [USER-STORIES.md](./USER-STORIES.md),
 which the [12], [13] and [14] suites are written against.

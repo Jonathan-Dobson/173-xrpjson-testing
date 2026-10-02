@@ -16,7 +16,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "xrpjson": "^1.1.0",
+    "xrpjson": "^1.2.0",
     "xrpl": "^4.6.0"
   }
 }

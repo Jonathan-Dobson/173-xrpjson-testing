@@ -194,6 +194,12 @@ checkFactory('ammDeposit', xrpjson.ammDeposit, {
   Asset: { currency: 'USD', issuer: ACCOUNT_B },
   Asset2: { currency: 'EUR', issuer: ACCOUNT_C },
   Amount: '100', // Either LPTokenOut or Amount must be set.
+  // A deposit mode flag is mandatory. xrpl.org `ammdeposit.md:129` — "You must
+  // specify exactly one of these flags" — enforced by rippled's preflight
+  // (`AMMDeposit.cpp:72`, `TxFlags.h:409-410`) and by the factory as of
+  // xrpjson 1.2.0. This fixture omitted it because the factory used to accept
+  // the transaction; the ledger never did.
+  Flags: 0x00080000, // tfSingleAsset
 }, 'AMMDeposit');
 
 checkFactory('ammVote', xrpjson.ammVote, {

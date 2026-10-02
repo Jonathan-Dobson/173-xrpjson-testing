@@ -531,7 +531,8 @@ yet.
 ## Finding A — No factory exposes `TicketSequence` (ADM-11)
 
 `TicketCreate` is supported, but no top-level factory can spend a ticket.
-Verified against the installed `xrpjson@1.1.0`:
+Verified against the installed `xrpjson@1.2.0` (re-checked after the 1.2.0
+upgrade; unchanged from 1.1.0):
 
 ```
 grep -r "TicketSequence" node_modules/xrpjson/dist/fp/factories/*.d.ts
