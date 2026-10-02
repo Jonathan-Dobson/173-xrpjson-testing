@@ -299,8 +299,59 @@ accepted by the ledger, and that reusing the same ticket is rejected. The
 story documents the gap rather than working around it silently, so the test
 fails loudly if the shape ever changes.
 
-**Status:** 🔴 Open upstream. Not reported yet. Severity: low for the six
-convenience fields, medium for `TicketSequence`.
+**Status:** 🟡 **Partially fixed — 2 of 79 factories done, not yet released.**
+See "Progress" below. Severity: low for the six convenience fields, medium for
+`TicketSequence`.
+
+**Progress (in `146-xrpjs` working tree, uncommitted).** The fix is being
+applied **one family at a time**, proving the pattern before scaling it — a
+79-file refactor is a two-file revert when it goes wrong on family 1, and a
+79-file archaeology exercise when it goes wrong on family 79.
+
+Two families converted so far:
+
+| Family | Change | Tests |
+|---|---|---|
+| `Payment` | `PaymentProps extends Omit<BaseTransactionFields, 'TransactionType' \| 'Flags'>`; `validateBaseTransaction` called after the Payment-specific checks | +12 |
+| `Ticket` | same, on `TicketCreateProps` | +6 |
+
+`146-xrpjs` gates: tsc 0, lint 0, **2876 tests** (was 2858). The harness's own
+happy-path fixtures for both families were re-run against the new build and
+still construct, so the next dependency bump will not break this repo.
+
+**The `Omit` is load-bearing, not decoration.** Two reasons, both verified:
+
+1. `TransactionType` — `buildFrozenTx` builds
+   `Object.freeze({ TransactionType: txType, ...fields })`. The spread comes
+   *second*, so a caller-supplied `TransactionType` would silently override the
+   discriminator. Inheriting the base field would put that hazard in the type.
+   A test asserts `TransactionType` is still rejected.
+2. `Flags` — the base types it `number | GlobalFlagsInterface`, but each
+   transaction narrows it to its own flags interface. Since
+   `PaymentFlagsInterface extends GlobalFlagsInterface`, the narrowing is
+   assignable and legal to re-declare. Omitting first is what makes the
+   redeclaration type-check.
+
+**The validator call is placed LAST**, after each factory's own field checks.
+That ordering is a decision, not an accident: a specific mistake should get a
+specific message, and the base check is the backstop for everything shared. A
+test pins it — `ticketCreate({TicketCount: 0})` must still say
+"TicketCount must be an integer from 1 to 250", not a generic base-field error.
+
+**What this changes for a user, concretely.** `payment` and `ticketCreate` now
+reject what `validateBaseTransaction` always meant to reject:
+
+```
+payment({ ..., Memos: 'not-an-array' })   -> ValidationError: invalid Memos
+payment({ ..., SourceTag: 'NaN' })        -> ValidationError: SourceTag must be a number
+payment({ ..., Delegate: <same as Account> }) -> ValidationError: cannot be the same
+ticketCreate({ ..., TicketSequence: 42 }) -> builds  ← previously impossible
+```
+
+`validateBaseTransaction` is no longer orphaned: it has its first real callers.
+
+**Still open:** the other 77 factories. And the 18 tests added here are family
+scoped — they are not a claim about the package.
 
 ---
 
