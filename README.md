@@ -87,6 +87,12 @@ so `run-all.mjs` schedules it at the end. Suite `14-amm-deposit-flags.mjs` is
 self-contained and non-destructive — it creates no AMM, because the AMMDeposit
 flag check is a *preflight* check that runs before any pool state is read.
 
+`15-flag-defect-verification.mjs` is the one suite that imports the **fixed
+`dist` from the `146-xrpjs` working tree** rather than this repo's published
+`node_modules` copy — the three fixes it verifies (Bugs #8–#10) are not
+released yet. It fails loudly if that path moves, rather than silently testing
+the old package. Once 1.3.0 ships, point it back at `xrpjson` proper.
+
 ## Coverage matrix
 
 | Family | Factories | Unit | Integration |
@@ -105,8 +111,8 @@ flag check is a *preflight* check that runs before any pool state is read.
 | LedgerStateFix | `ledgerStateFix` | ✓ | — |
 | Loan (4) | `loan*` | ✓ | — |
 | LoanBroker (5) | `loanBroker*` | ✓ | — |
-| MPT (4) | `mptoken*` | ✓ | ✓ `09-mptoken` |
-| NFToken (6) | `nftoken*` | ✓ | ✓ `08-nft`, `12-nft-lifecycle` |
+| MPT (4) | `mptoken*` | ✓ | ✓ `09-mptoken`, `15` (flag defect) |
+| NFToken (6) | `nftoken*` | ✓ | ✓ `08-nft`, `12-nft-lifecycle`, `15` (flag defect) |
 | Offer (2) | `offer*` | ✓ | ✓ `05-offer` |
 | Oracle (2) | `oracle*` | ✓ | — |
 | Payment | `payment` | ✓ | ✓ `01-payment-xrp`, `04-payment-iou` |
@@ -114,7 +120,7 @@ flag check is a *preflight* check that runs before any pool state is read.
 | PermissionedDomain (2) | `permissionedDomain*` | ✓ | — |
 | SetRegularKey | `setRegularKey` | ✓ | ✓ `13-account-admin` |
 | SignerList | `signerListSet` | ✓ | ✓ `13-account-admin` |
-| Sponsorship (2) | `sponsorship*` | ✓ | — |
+| Sponsorship (2) | `sponsorship*` | ✓ | `15` (flag defect; ledger verdict blocked) |
 | Ticket | `ticketCreate` | ✓ | ✓ `13-account-admin` (see Bug #5) |
 | TrustSet | `trustSet` | ✓ | ✓ `03-trust-set`, `10-iou`, `11-check-iou` |
 | Vault (6) | `vault*` | ✓ | — |
@@ -187,5 +193,22 @@ AMM factories checked flag *cardinality* ("exactly one mode") but not flag
 `Flags: tfSingleAsset | tfWithdrawAll` was accepted by the factory and refused
 by the ledger with `temINVALID_FLAG`. Both fixed in v1.2.0 and verified against
 a live ledger by suite [14].
+
+**Fixed by this project, not yet released** — three factories were *too strict*,
+refusing transactions the ledger accepts (Bugs #8, #9, #10, fixed in
+`146-xrpjs` `3a55880`):
+
+- `sponsorshipTransfer` rejected `spfSponsorFee`, making the documented
+  fee-and-reserve combination unconstructible. **No ledger verdict** — the
+  Sponsor amendment is disabled on testnet and this harness's `xrpl@4.6.0`
+  cannot encode the transaction type.
+- `mptokenIssuanceCreate` collapsed a boolean-map `Flags` to `0`, so setting
+  `tfMPTCanTransfer` then being told `TransferFee` needed a flag you'd just set.
+- `nftokenMint` gated `TransferFee` on field *presence*; rippled gates on
+  *value*. XLS-20 and xrpl.org both say presence — **the prose is what is
+  wrong**, settled on a live ledger.
+
+These are the opposite shape to Bugs #6/#7, which accepted what the ledger
+refused. Both directions are defects; catching only one is a partial audit.
 
 See [DIVERGENCES.md](./DIVERGENCES.md) for full details.

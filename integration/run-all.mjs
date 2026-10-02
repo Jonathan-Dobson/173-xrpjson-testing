@@ -20,6 +20,7 @@ import { run as runCheckIou    } from './tests/11-check-iou.mjs';
 import { run as runNftLifecycle} from './tests/12-nft-lifecycle.mjs';
 import { run as runAccountAdmin} from './tests/13-account-admin.mjs';
 import { run as runAmmDepositFlags } from './tests/14-amm-deposit-flags.mjs';
+import { run as runFlagDefectVerification } from './tests/15-flag-defect-verification.mjs';
 
 const client = await createClient();
 const [alice, bob] = await fundWallets(client, 2);
@@ -77,6 +78,17 @@ console.log('');
 // so it creates no AMM and mutates no account state. Must still run before [13],
 // which mutates Alice.
 accumulate(await runAmmDepositFlags(client, alice, bob));
+console.log('');
+
+// [15] Flag-defect live verification — settles the three over-strict
+// factories found by the 2026-10-02 flag-contradiction audit. Each defect
+// gets a controlled pair: a case rippled accepts beside one it rejects, so a
+// lone "it succeeded" cannot be mistaken for the gate having disappeared.
+//
+// NOTE: this suite imports the FIXED dist from the 146-xrpjs working tree,
+// not this repo's published node_modules copy. It is the one suite that does,
+// because the three fixes it verifies are not released yet.
+accumulate(await runFlagDefectVerification(client, alice, bob));
 console.log('');
 
 // [13] Account admin — MUST be last. It mutates Alice's signing setup

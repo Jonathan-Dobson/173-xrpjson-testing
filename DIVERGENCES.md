@@ -421,6 +421,93 @@ here.
 
 ---
 
+## Bugs #8–#10 — Three over-strict factories (fixed in 146, awaiting release)
+
+These three came from the flag-contradiction audit in
+`146-xrpjs/docs/audit/2026-10-02-flag-contradiction-audit.md`, and they are the
+**opposite shape** to Bugs #6 and #7. Those two accepted what the ledger
+refused; these three *refused what the ledger accepts*. A user following the
+documentation could not build a valid transaction at all.
+
+⚠️ **A correction to an earlier measurement in this file.** The audit's scope
+was briefed as "7 of 63 factories validate flags." That was a **grep
+artifact**: the heuristic looked for validator-shaped names
+(`popcount|FLAG_BITS|FLAGS_MASK`). Sweeping instead for *runtime reads of
+`props.Flags`* finds **17**. Ten factories carry real flag logic the heuristic
+missed — `did-delete`, `did-set`, `loan-manage`, `loan-pay`,
+`nftoken-create-offer`, `nftoken-mint`, `offer-create`, `payment`,
+`sponsorship-set`, `vault-create` — and **two of these three defects live in
+that hidden set.** The lesson generalises: a grep for one *shape* of code is
+not a safe proxy for "does this thing reason about the field at all."
+
+### Bug #8 — `sponsorshipTransfer` rejects `spfSponsorFee`, which rippled allows
+
+**Severity: high.** `SponsorFlags` has no other entry point, so the documented
+fee-and-reserve combination was simply unconstructible.
+
+```ts
+// src/fp/factories/sponsorship-transfer.ts:404-408 (before)
+if ((props.SponsorFlags & ~SPF_SPONSOR_RESERVE) !== 0) {
+  throw new ValidationError('SponsorshipTransfer: SponsorFlags may only set the spfSponsorReserve bit…');
+}
+```
+
+rippled keeps the two sponsor bits in **independent** predicates
+(`isFeeSponsored` / `isReserveSponsored`, `SponsorHelpers.h:32-45`) and its
+`spfSponsorFlagMask` excludes both from the invalid set. xrpl.js 5.3.0 uses the
+same mask. `SponsorFlags: 0x00000003` is the documented fee+reserve form.
+
+This is `SponsorFlags`, not `Flags` — `Flags` itself is correct here.
+
+**Status:** 🟡 **Fixed in `146-xrpjs` `3a55880`, not yet released.** ⚠️ **No
+ledger verdict.** `featureSponsor` is disabled on testnet, *and* this harness's
+`xrpl@4.6.0` cannot even encode `SponsorshipTransfer`. Three implementations
+agree, which is strong, but it is not a confirmed submission. Suite [15] skips
+this with the reason stated.
+
+### Bug #9 — `mptokenIssuanceCreate` treats a boolean-map `Flags` as zero
+
+`Flags` has two documented input forms: a numeric bitmask, or a boolean map
+keyed by `tfMPT*` names. The map form was collapsed to `0` before the
+cross-field gates ran, so a caller who correctly wrote
+`{ tfMPTCanTransfer: true }` was told their `TransferFee` needed a flag they had
+just set.
+
+The inconsistency is the tell: the sibling `mptokenIssuanceSet` already resolved
+the map correctly.
+
+**Status:** 🟡 **Fixed in `3a55880`, not yet released.** Ledger-verified by
+suite [15] — `Flags=0x20` with `TransferFee: 100` returns `tesSUCCESS`, and the
+control without the flag is refused.
+
+### Bug #10 — `nftokenMint` gates `TransferFee` on presence; rippled gates on value
+
+```ts
+// src/fp/factories/nftoken-mint.ts:319-327 (before)
+if (props.TransferFee !== undefined && (numericFlags & TF_TRANSFERABLE) !== TF_TRANSFERABLE) { /* throw */ }
+```
+
+```cpp
+// NFTokenMint.cpp:92-96
+// If a non-zero TransferFee is set then the tfTransferable flag must also be set.
+if (f > 0u && !ctx.tx.isFlag(tfTransferable)) return temMALFORMED;
+```
+
+**The prose is what is wrong here.** XLS-20 and xrpl.org both describe the
+coupling in terms of *presence*, so the old code was defensible against the
+documentation and wrong against the implementation. Settled on a live ledger:
+`TransferFee: 0` without `tfTransferable` is accepted, `TransferFee: 1` without
+it is `temMALFORMED` — identical flag state, different value. Suite [15] pins
+both halves as a controlled pair.
+
+This finding independently reproduces a conclusion reached earlier in this
+project by a different route, which is worth noting: the implementation and
+the prose disagree here, and the ledger is what settles it.
+
+**Status:** 🟡 **Fixed in `3a55880`, not yet released.** Ledger-verified.
+
+---
+
 ## Test-scaffolding bugs (not xrpjson)
 
 ### Bug #S7 — Ledger rules that cost three wrong implementations
@@ -516,6 +603,40 @@ stricter, that fixture fails, and the instinct to "fix" it by loosening the new
 check is exactly backwards. Suite [14] is the deliberate counterweight: it pins
 the rule from the ledger side so a future loosening has something to fail
 against.
+
+### Bug #S10 — Suite [15] had no standalone entry point and exited 0
+
+**File:** `integration/tests/15-flag-defect-verification.mjs`
+
+**Found by:** running the file its own header told you to run.
+
+```
+$ node integration/tests/15-flag-defect-verification.mjs
+$ echo $?
+0
+```
+
+**No output. Exit 0.** The module defined and exported `run()` but never
+called it — the `if (process.argv[1] === fileURLToPath(import.meta.url))`
+guard that suites [12]–[14] all carry was missing. Every other suite in this
+directory has it.
+
+**Why this is worse than a crash.** A suite that throws is obvious. A suite
+that exits 0 having tested nothing is the failure mode this project exists to
+prevent: it looks exactly like a green run, in a terminal, in CI, in a report
+someone copies. The header comment claiming "Run standalone: node …" made it
+more dangerous, because following the documented instruction was the way to
+reach the false pass.
+
+**Fix:** added the standard guard, delegating to `withStandaloneSetup(run)`.
+The suite then runs as documented: **10 passed, 0 failed, 1 skipped** (the skip
+is Defect 1, explained in Bug #8).
+
+**The transferable rule.** A test file that exports a runner and is not wired
+into a caller has *no* failure signal by construction. Wiring it into
+`run-all.mjs` is what makes it real; the standalone guard is what makes it
+verifiable by hand. Neither is optional, and "it exits 0" is not evidence that
+either exists.
 
 ### Bug #S1 — Integration test ordering for [10] IOU
 
@@ -696,26 +817,27 @@ starts returning `false`.
 
 ## Summary
 
-- **5 real bugs** in xrpjson found — 5 fixed upstream (v1.0.3, v1.0.4, v1.1.0,
-  v1.2.0), 1 withdrawn:
+- **8 real bugs** in xrpjson found — 5 released (v1.0.3, v1.0.4, v1.1.0,
+  v1.2.0), **3 fixed but unreleased** (Bugs #8, #9, #10), 1 open, 1 withdrawn:
   - **Bug #5 (open)** — 7 base fields (`Memos`, `SourceTag`,
     `LastLedgerSequence`, `AccountTxnID`, `NetworkID`, `Delegate`,
     `TicketSequence`) are declared in `BaseTransactionFields` and validated by
     `validateBaseTransaction`, but appear in **0 of 79** factory prop types,
     and the validator is never called by anything in the package. A
-    type-surface and
-    validation-coverage gap — **all seven work at runtime**; `TicketSequence`
-    is the one with real user impact.
+    type-surface and validation-coverage gap — **all seven work at runtime**;
+    `TicketSequence` is the one with real user impact.
   - **Bug #4 (withdrawn)** — `factory()` / `factory(null)` throw `TypeError`.
     Re-measured and taken back: the proposed fix cannot work, because
     `require(props.Account, …)` dereferences at the call site, before a guard
     inside `require()` could run, and there is no central wrapper to hold one.
 - **Fixed by this project:** Bugs #1, #2, #3 (v1.0.3 / v1.0.4 / v1.1.0) and
   **#6 and #7 (v1.2.0)** — the latter two verified against a live ledger by
-  suite [14].
-- **5 + 3 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
+  suite [14]. Bugs #8, #9 and #10 are fixed in `146-xrpjs` `3a55880` but
+  **not yet released**; #9 and #10 are ledger-verified by suite [15], #8 is not.
+- **5 + 4 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
   (S7 covers three ledger rules, S8 the NFT metadata extractors, S9 a happy-path
-  fixture that was asserting a library bug).
+  fixture that was asserting a library bug, S10 a suite with no standalone
+  entry point).
 - **Coverage expanded** from 7 (unit) + 11 (integration) test scenarios to:
   - 20 unit scenarios (test.mjs)
   - 322 generic factory contract scenarios (unit-generic-harness.mjs)
@@ -725,7 +847,8 @@ starts returning `false`.
   - 18 integration scenarios, suite [12] NFT lifecycle
   - 23 integration scenarios, suite [13] account admin
   - 5 live-ledger scenarios, suite [14] AMM deposit flags
-  - **Total: 726 test scenarios across all 79 factories.** (Suite [14] runs 7
+  - 10 live-ledger scenarios, suite [15] flag-defect verification
+  - **Total: 736 test scenarios across all 79 factories.** (Suite [14] runs 7
     checks; 5 are ledger-level, 2 assert the installed factory agrees. Both
     halves are active as of `xrpjson@1.2.0` — earlier they skipped.)
 
@@ -740,6 +863,7 @@ which the [12], [13] and [14] suites are written against.
 | v1.0.4 | `AccountSet` did not require `Account` | `unit-generic-harness.mjs` |
 | v1.1.0 | `accountSet` TickSize + `payment` DeliverMin threw bare `Error` | upstream citation audit; guarded here by `unit-error-contract.mjs` |
 | v1.2.0 | `ammDeposit` enforced no mode-flag rule at all; AMM factories didn't validate flag membership | sibling-factory diff, then verified live by suite [14] |
+| *unreleased* | `sponsorshipTransfer`, `mptokenIssuanceCreate`, `nftokenMint` rejected input rippled accepts | flag-contradiction audit `3a55880`; #9/#10 verified by suite [15] |
 | *unreleased* | 7 base fields missing from all 79 factory prop types | suite [13], ADM-11, then widened by source audit |
 | *withdrawn* | `factory()` / `factory(null)` throw `TypeError` | `unit-error-contract.mjs` § 3 — not fixable as proposed |
 
