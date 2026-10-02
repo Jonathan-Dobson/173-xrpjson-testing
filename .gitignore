@@ -4,3 +4,7 @@ dist/
 *.log
 .vscode/
 .idea/
+
+# Local npm cache. The sandbox this repo is developed in blocks `unlink`
+# outside the workspace, so npm's cacache must live inside it — see README.
+.npm-cache/

@@ -6,16 +6,17 @@
     "test": "node test.mjs",
     "test:generic": "node tests/unit-generic-harness.mjs",
     "test:families": "node tests/unit-families.mjs",
-    "test:unit": "node test.mjs && node tests/unit-generic-harness.mjs && node tests/unit-families.mjs",
+    "test:errors": "node tests/unit-error-contract.mjs",
+    "test:unit": "node test.mjs && node tests/unit-generic-harness.mjs && node tests/unit-families.mjs && node tests/unit-error-contract.mjs",
     "test:integration": "node integration/run-all.mjs",
-    "test:all": "node test.mjs && node tests/unit-generic-harness.mjs && node tests/unit-families.mjs && node integration/run-all.mjs"
+    "test:all": "node test.mjs && node tests/unit-generic-harness.mjs && node tests/unit-families.mjs && node tests/unit-error-contract.mjs && node integration/run-all.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "xrpjson": "^1.0.2",
+    "xrpjson": "^1.1.0",
     "xrpl": "^4.6.0"
   }
 }

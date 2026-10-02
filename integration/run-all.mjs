@@ -17,6 +17,8 @@ import { run as runCheck       } from './tests/07-check.mjs';
 import { run as runNft         } from './tests/08-nft.mjs';
 import { run as runMPToken     } from './tests/09-mptoken.mjs';
 import { run as runCheckIou    } from './tests/11-check-iou.mjs';
+import { run as runNftLifecycle} from './tests/12-nft-lifecycle.mjs';
+import { run as runAccountAdmin} from './tests/13-account-admin.mjs';
 
 const client = await createClient();
 const [alice, bob] = await fundWallets(client, 2);
@@ -62,6 +64,18 @@ console.log('');
 accumulate(await runMPToken (client, alice, bob));
 console.log('');
 accumulate(await runCheckIou(client, alice, bob));
+console.log('');
+
+// [12] NFT lifecycle — self-contained (mints its own tokens, funds its own
+// broker), so it only has to run after Alice/Bob are funded.
+accumulate(await runNftLifecycle(client, alice, bob));
+console.log('');
+
+// [13] Account admin — MUST be last. It mutates Alice's signing setup
+// (regular key → removed, signer list → created → removed) and finally
+// deletes a throwaway account. Both mutations are cleaned up by the suite
+// itself, but running it last keeps the blast radius off every other suite.
+accumulate(await runAccountAdmin(client, alice, bob));
 
 await client.disconnect();
 

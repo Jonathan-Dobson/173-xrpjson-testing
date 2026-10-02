@@ -73,7 +73,212 @@ but the runtime validation didn't enforce it.
 
 ---
 
+## Bug #3 — Two throws bypassed the ValidationError contract (FIXED in v1.1.0)
+
+**Factories:** `accountSet` (TickSize), `payment` (DeliverMin)
+
+**Bug:** These two guards threw a bare `new Error(...)` while all 729 other
+throw sites in the fp layer throw `ValidationError`:
+
+```js
+// account-set.ts — TickSize out of the 3..15 / 0 range
+throw new Error('AccountSet: TickSize must be 3-15 or 0');
+
+// payment.ts — DeliverMin without tfPartialPayment
+throw new Error('Payment: DeliverMin requires tfPartialPayment flag');
+```
+
+**Why this matters downstream:** a caller branching on
+`err instanceof ValidationError` is deciding between "the user sent bad
+input" (400) and "the library has a bug" (500). Because a bare `Error` is
+not a `ValidationError`, a `TickSize` of 16 or a `DeliverMin` without
+`tfPartialPayment` was mis-routed into the "unexpected bug" branch — an
+unhandled 500 instead of a 400. Both are trivially reachable: `TickSize` is
+a 0..16 integer and `DeliverMin` is a normal payment field.
+
+**Verification against the published artifact** (xrpjson@1.1.0, `dist/`):
+
+```
+bare `throw new Error(` in dist/fp/factories/  →  0
+`throw new ValidationError(`                  →  731
+```
+
+Zero bare throws remain anywhere in the published package.
+
+**Fix:** Both sites now throw `ValidationError`.
+
+**Tests added upstream:** `tests/fp/account-set.test.ts`,
+`tests/fp/payment.test.ts` (assert the error type).
+
+**Tests added here:** `tests/unit-error-contract.mjs` — the regression guard
+this project was missing. Nothing in the consumer suite previously asserted
+the error *type* on these two paths, so a regression would have shipped
+unnoticed. The new suite pins the type, the message, and the valid/invalid
+boundaries (TickSize 0/3/5/15 accepted, 2/16/-1 rejected; DeliverMin accepted
+with numeric `0x00020000`, `PaymentFlags.tfPartialPayment`, and
+`{ tfPartialPayment: true }`).
+
+**Status:** ✅ Fixed in v1.1.0. Consumer upgraded, 30 regression tests green.
+
+---
+
+## Bug #4 — `factory()` / `factory(null)` throw TypeError, not ValidationError (OPEN)
+
+**Factories:** all 79
+
+**Bug:** Every factory dereferences `props.Account` before checking that
+`props` is an object. Calling with no argument, or with `null`, throws a raw
+`TypeError`:
+
+```
+factory()          → TypeError: Cannot read properties of undefined (reading 'Account')
+factory(null)      → TypeError: Cannot read properties of null (reading 'Account')
+```
+
+This is **the same class of defect as Bug #3**, one layer down: a caller
+passing a missing or null argument still has their bad input reported as a
+library bug rather than a validation failure. The 1.1.0 fix corrected the two
+sites that were already past the dereference; the dereference itself was left
+alone, so all 79 factories still have this shape.
+
+**Reproduction:** `payment()`, `payment(null)` — or any other factory.
+
+**Severity:** lower than Bug #3 in practice (a null argument is a louder
+caller bug than a `TickSize` of 16), but it defeats the same
+`instanceof ValidationError` contract, so it belongs in the same bucket.
+
+**Suggested fix upstream:** guard the entry of each factory (or a shared
+wrapper in `src/fp/shape.ts`) with a
+`require(isPlainObject(props), '<Name>: props must be an object')` check
+before any property access.
+
+**Tests added here:** characterization tests in
+`tests/unit-error-contract.mjs` § 3 that pin today's `TypeError` behavior.
+They are deliberately written to **fail loudly once upstream fixes this**,
+so the suite and this entry get updated together rather than drifting.
+
+**Status:** 🔴 Open upstream. Not reported yet.
+
+---
+
+## Bug #5 — No factory exposes `TicketSequence`, so tickets can't be spent (OPEN)
+
+**Factories:** all top-level factories (gap is systemic, not per-factory)
+
+**Bug:** `ticketCreate` is fully supported, but **no top-level factory can
+spend the ticket it creates.** A ticketed standalone transaction has to carry
+`Sequence: 0` and `TicketSequence: N`, and neither field is accepted by any
+exported factory's props.
+
+Verified against the installed `xrpjson@1.1.0`:
+
+```
+$ grep -l "TicketSequence" node_modules/xrpjson/dist/fp/factories/*.d.ts
+  → batch.d.ts only
+```
+
+`TicketSequence` appears in exactly two places in the whole package:
+
+1. `dist/types/base.d.ts:73` — an internal base type that no exported factory
+   uses.
+2. `dist/fp/factories/batch.d.ts` — for **inner** `RawTransactions` in a
+   `Batch`, which is a different transaction entirely.
+
+So a user who creates tickets with `ticketCreate` has to merge
+`TicketSequence` into `toJSON()` by hand, outside the factory's validation:
+
+```js
+const tx = payment({ Account, Destination, Amount });
+const ticketed = { ...tx.toJSON(), Sequence: 0, TicketSequence: 1 };
+```
+
+That bypass is outside the validated path, so a caller gets none of the
+`Payment` factory's eager checking on a transaction the ledger will treat as
+ticketed.
+
+**Canonical sources:**
+- xrpl.js `packages/xrpl/src/models/transactions/common.ts` — `TicketSequence`
+  is part of the base transaction interface alongside `Sequence`.
+- xrpl.org `ticketcreate.md` — "Tickets are used to reserve a transaction
+  sequence number for a future transaction… The transaction that uses a ticket
+  sets `Sequence` to `0` and `TicketSequence` to the ticket's number."
+- rippled parses `TicketSequence` on any transaction type, not just `Batch`.
+
+**Same shape as Bug #2** — a required field missing from the factory's props
+rather than a wrong value in it. Bug #2 was `AccountSet.Account`; this is
+`TicketSequence` on every non-`Batch` factory.
+
+**Tests added here:** ADM-11 in `integration/tests/13-account-admin.mjs`
+deliberately performs the hand-merge and asserts the resulting transaction is
+accepted by the ledger, and that reusing the same ticket is rejected. The
+story documents the gap rather than working around it silently, so the test
+fails loudly if the shape ever changes.
+
+**Status:** 🔴 Open upstream. Not reported yet.
+
+---
+
 ## Test-scaffolding bugs (not xrpjson)
+
+### Bug #S7 — Ledger rules that cost three wrong implementations
+
+Writing suite [13] surfaced three XRPL rules that are easy to get wrong and
+that no type definition or factory doc warns you about. All three were caught
+only by running against testnet.
+
+**1. A multisigned transaction needs the full fee, not the base fee.**
+`client.autofill(tx)` computes the *incremental* cost, so a multisigned
+payment fails with `telINSUF_FEE_P` — which reads like a funding problem.
+xrpl.org `multi-signing.md`: "The transaction cost … must be at least **(N+1)
+times the normal transaction cost**, where N is the number of signatures
+provided." The signer count is `autofill`'s second argument:
+`client.autofill(tx, 1)`.
+
+**2. A ticket's number is not derivable from account state.**
+`TicketCreate` reserves the account's *next* sequence numbers, and
+rippled `TicketCreate.cpp::doApply` reads `firstTicketSeq` from the account
+root *after* the transaction machinery has incremented it. Reading the
+account too early — or computing `sequence + 1` from a pre-TicketCreate read
+— yields a number that does not exist, and the payment fails with
+`terPRE_TICKET` ("Ticket is not yet in ledger"). That code is **retriable**,
+so it looks like a propagation race rather than a wrong number. The robust
+move is to stop deriving it and read the tickets out of the owner directory:
+`account_objects` with `type: 'ticket'`.
+
+**3. A testnet-faucet account cannot be `AccountDelete`d for ~17 minutes.**
+rippled `AccountDelete::doApply` refuses while
+`account.Sequence + 255 > currentLedgerIndex`. The faucet sets a new account's
+`Sequence` to the **current ledger index** (measured: `Sequence: 21195755` at
+ledger `21195800`), so a freshly funded account is immediately "too soon".
+256 ledgers at testnet's ~4s close is ~17 minutes. The account has to be
+funded at the *top* of the suite so the rest of the run provides the wait —
+and the wait needs a per-test timeout override, because the shared 90s
+`runTest` budget cannot cover it, plus reconnect handling, because an idle
+testnet WebSocket drops over that span.
+
+**Status:** ✅ All three fixed in suites [12] and [13].
+
+### Bug #S8 — `extractCreatedIndex` silently returns undefined for NFToken mints
+
+`integration/helpers.mjs` reuses the generic `extractCreatedIndex` in
+`11-check-iou.mjs`, which looks for a `CreatedNode` of the requested type. An
+NFToken is not created as its own ledger entry — it is appended to an
+`NFTokenPage`, appearing as a `ModifiedNode` (or `CreatedNode` for the first
+page) with the ID at `NFTokens[-1].NFToken.NFTokenID`. So
+`extractCreatedIndex(res, 'NFToken')` finds nothing and returns `undefined`
+with no error.
+
+Suite [8] already worked around this with a local `extractNFTokenId`. Suite
+[12] initially used the shared helper and failed 17/17 at the first mint.
+`extractNFTokenId` is now in `helpers.mjs` so the next suite does not
+rediscover it.
+
+A related trap: `extractCreatedIndex` also returns
+`NewFields.NFTokenID` for an `NFTokenOffer`, which is the *token's* ID, not
+the offer index. `extractOfferIndex` reads `CreatedNode.LedgerIndex` instead.
+
+**Status:** ✅ Fixed. Three purpose-named extractors now exist rather than one
+overloaded one.
 
 ### Bug #S1 — Integration test ordering for [10] IOU
 
@@ -165,11 +370,16 @@ and TickSize to 0, undoing any state from [2].
 
 **File:** `xrpjson.mjs`
 
-**Issue:** The comment says "xrpjson 1.0.2 exposes its functional factories
+**Issue:** The comment said "xrpjson 1.0.2 exposes its functional factories
 from the documented root." As of v1.0.3, this is `1.0.3`, not `1.0.2`. The
 shim still works.
 
-**Status:** 🟡 Cosmetic. Not fixed.
+**Status:** ✅ Fixed. The comment now tracks the installed version (`1.1.0`),
+and it records the non-obvious part: `ValidationError` and the `*Flags` enums
+are **not** on the root entry point, only on `xrpjson/errors` and
+`xrpjson/flags`. Importing them from bare `xrpjson` yields `undefined`, which
+makes `err instanceof ValidationError` silently `false` — the same
+mis-routing Bug #3 is about, arrived at from the other direction.
 
 ---
 
@@ -215,15 +425,72 @@ The factories enforce invariants the xrpl.js class API misses. Highlights:
 
 **Status:** ✅ All 79 factories now have happy-path coverage.
 
+### Coverage #3 — Error-contract suite locks the `ValidationError` guarantee
+
+`tests/unit-error-contract.mjs` (added for the v1.1.0 upgrade) asserts the
+error *type*, not just the fact of throwing:
+
+- The two paths fixed in 1.1.0 (`accountSet` TickSize, `payment` DeliverMin)
+  throw `ValidationError` with the exact expected message.
+- Their valid values still construct — guarding against the fix over-tightening.
+- A cross-cutting sweep over all 79 factories × 10 malformed input shapes:
+  anything the factories reject must be a `ValidationError`, never a bare
+  `Error` or `TypeError`.
+
+The sweep is tiered, because a uniform "must throw" assertion would be wrong:
+
+- **Tier A (must throw)** — `{}`, bare string, `[]`, `123`,
+  `{ Account: null }`, `{ Account: 123 }`. Every factory has an `Account`
+  requirement, so all 79 reject these.
+- **Tier B (may ignore)** — field-specific garbage like
+  `{ Account, Amount: "not-a-number" }`. Four factories
+  (`accountSet`, `didDelete`, `mptokenIssuanceCreate`, `setRegularKey`)
+  have no `Amount` field at all, so ignoring it is correct. The invariant is
+  only: *if* it rejects, the rejection is a `ValidationError`.
+
+This suite is also the first place in the repo that asserts the shim's
+`ValidationError` is the *same class object* as `xrpjson/errors`'s — if those
+ever diverge, every `instanceof` check against the root import silently
+starts returning `false`.
+
+**Status:** ✅ 30 tests, green.
+
 ---
 
 ## Summary
 
-- **2 real bugs** in xrpjson found and fixed (v1.0.3, v1.0.4).
-- **5 test-scaffolding bugs** in 173-xrpjson-testing found and fixed.
+- **3 real bugs** in xrpjson found — 2 fixed upstream (v1.0.3, v1.0.4),
+  1 fixed in v1.1.0, and **2 open**:
+  - `factory()` / `factory(null)` throw `TypeError` — Bug #4
+  - no factory exposes `TicketSequence`, so `ticketCreate` output is
+    unspendable through the API — Bug #5
+- **5 + 2 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
+  (S7 covers three ledger rules, S8 the NFT metadata extractors).
 - **Coverage expanded** from 7 (unit) + 11 (integration) test scenarios to:
   - 20 unit scenarios (test.mjs)
   - 322 generic factory contract scenarios (unit-generic-harness.mjs)
   - 236 per-family happy-path scenarios (unit-families.mjs)
-  - 70 integration scenarios (integration/run-all.mjs)
-  - **Total: 648 test scenarios across all 79 factories.**
+  - 30 error-contract scenarios (unit-error-contract.mjs)
+  - 70 integration scenarios, suites [1]–[11] (integration/run-all.mjs)
+  - 18 integration scenarios, suite [12] NFT lifecycle
+  - 23 integration scenarios, suite [13] account admin
+  - **Total: 719 test scenarios across all 79 factories.**
+
+New user stories are specified in [USER-STORIES.md](./USER-STORIES.md),
+which the [12] and [13] suites are written against.
+
+### xrpjson release history driven by this project
+
+| Version | What it fixed | Found by |
+|---|---|---|
+| v1.0.3 | `EscrowCreate` Ripple Epoch lower bound | integration suite [6] |
+| v1.0.4 | `AccountSet` did not require `Account` | `unit-generic-harness.mjs` |
+| v1.1.0 | `accountSet` TickSize + `payment` DeliverMin threw bare `Error` | upstream citation audit; guarded here by `unit-error-contract.mjs` |
+| *unreleased* | `factory()` / `factory(null)` throw `TypeError` | `unit-error-contract.mjs` § 3 |
+| *unreleased* | no factory exposes `TicketSequence` | suite [13], ADM-11 |
+
+No *new* xrpjson defect was found by suites [12] and [13]. All 8 factories
+they exercise behaved per spec against a live ledger; the three failures the
+suites hit while being written (S7) were bugs in the tests' understanding of
+ledger rules, not in the package. That is a different result from suites
+[6] and the generic harness, and worth recording as such.

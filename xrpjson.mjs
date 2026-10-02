@@ -1,6 +1,12 @@
-// xrpjson 1.0.5 exposes its functional factories, errors, and flag enums
+// xrpjson 1.1.0 exposes its functional factories, errors, and flag enums
 // via the public exports map. Use the documented bare-specifier subpaths
 // so the shim doesn't depend on internal dist/ paths.
+//
+// NB: `ValidationError` and the `*Flags` enums are NOT on the root entry —
+// they live on the `xrpjson/errors` and `xrpjson/flags` subpaths. Any code
+// importing them from bare `xrpjson` gets `undefined`, which makes
+// `err instanceof ValidationError` silently false. Always route through
+// this shim rather than the root specifier.
 export * from 'xrpjson';
 export { ValidationError, TransactionError } from 'xrpjson/errors';
 export * from 'xrpjson/flags';

@@ -29,6 +29,34 @@ export function assertSuccess(response) {
   }
 }
 
+/**
+ * Submit something that is EXPECTED to be rejected, and report whether it was.
+ *
+ * Needed because `submitAndWait` does not return uniformly on failure: it
+ * throws for `tef*` results (tefBAD_AUTH, tefPAST_LEDGER_SEQ, …) and returns
+ * normally for `tem*`/`tec*` ones. A test that just reads
+ * `res.result.meta.TransactionResult` therefore blows up on exactly the
+ * rejections it was written to observe.
+ *
+ * Returns `{ ok, result }`:
+ *   - `ok: true`  → the ledger rejected it, as intended
+ *   - `ok: false` → it unexpectedly succeeded; the caller should fail
+ *
+ * Any error that is NOT a tef rejection is rethrown, so a genuine bug in the
+ * test still surfaces instead of being swallowed as "rejected".
+ */
+export async function expectRejected(submitFn) {
+  try {
+    const res = await submitFn();
+    const result = res?.result?.meta?.TransactionResult;
+    return { ok: result !== 'tesSUCCESS', result };
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (!/\btef[A-Z_]+\b/.test(msg)) throw e;
+    return { ok: true, result: msg.split('\n')[0].trim() };
+  }
+}
+
 /** Extract the LedgerIndex of a newly created ledger entry by type. */
 export function extractCreatedIndex(response, ledgerEntryType) {
   const node = response.result.meta.AffectedNodes
@@ -36,6 +64,120 @@ export function extractCreatedIndex(response, ledgerEntryType) {
   return node?.CreatedNode?.NewFields?.CheckID
       ?? node?.CreatedNode?.NewFields?.NFTokenID
       ?? node?.CreatedNode?.LedgerIndex;
+}
+
+/**
+ * Extract the NFTokenID minted by a transaction.
+ *
+ * Deliberately does NOT use `extractCreatedIndex`: an NFToken is not created
+ * as its own ledger entry. It is appended to an `NFTokenPage`, which shows up
+ * as a Modified (or Created, for the first page) node, and the ID is the last
+ * entry of `NFTokens`. Looking for `CreatedNode.LedgerEntryType === 'NFToken'`
+ * finds nothing and yields undefined.
+ */
+export function extractNFTokenId(response) {
+  const node = response.result.meta.AffectedNodes
+    .find(n => n.ModifiedNode?.LedgerEntryType === 'NFTokenPage'
+            || n.CreatedNode?.LedgerEntryType  === 'NFTokenPage');
+  const page = node?.ModifiedNode?.FinalFields ?? node?.CreatedNode?.NewFields;
+  return page?.NFTokens?.at(-1)?.NFToken?.NFTokenID;
+}
+
+/**
+ * Extract the index of a newly created NFTokenOffer.
+ *
+ * Deliberately does NOT reuse `extractCreatedIndex`: an NFTokenOffer's
+ * NewFields carry the *token's* NFTokenID, so the generic helper would hand
+ * back the token id instead of the offer id. The offer index is what
+ * NFTokenAcceptOffer / NFTokenCancelOffer take.
+ */
+export function extractOfferIndex(response) {
+  const node = response.result.meta.AffectedNodes
+    .find(n => n.CreatedNode?.LedgerEntryType === 'NFTokenOffer');
+  return node?.CreatedNode?.LedgerIndex;
+}
+
+/** Current XRP balance of `address`, in drops, as a BigInt. */
+export async function balanceDrops(client, address) {
+  const res = await client.request({
+    command: 'account_info',
+    account: address,
+    ledger_index: 'validated',
+  });
+  return BigInt(res.result.account_data.Balance);
+}
+
+/**
+ * Reconnect the client if the socket has dropped.
+ *
+ * Long waits (notably ADM-12 waiting out the 256-ledger AccountDelete delay)
+ * outlive an idle testnet WebSocket. Without this, the reconnect is attempted
+ * implicitly by the next request and fails with "WebSocket is not open".
+ * Returns true if a reconnect was performed.
+ */
+export async function ensureConnected(client) {
+  const state = client.getWebsocket?.()?.readyState;
+  // WebSocket.OPEN === 1
+  if (state === undefined || state === 1) return false;
+  await client.connect();
+  return true;
+}
+
+/**
+ * Poll an arbitrary async probe until it returns a truthy value.
+ *
+ * General sibling of `waitForAccountState`, for things that are not
+ * account_data fields — e.g. reading an account's reserved tickets out of the
+ * owner directory.
+ */
+export async function waitFor(
+  probe,
+  { timeoutMs = 30_000, intervalMs = 500, label = 'condition' } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await probe();
+    if (value) return value;
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for ${label}`);
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+}
+
+/**
+ * Poll `account_info` until `predicate(accountData)` returns true.
+ *
+ * Needed because `submitAndWait` returning does NOT guarantee that a
+ * subsequent `autofill` will observe the change. Setting a regular key and
+ * immediately signing with it can race the account-state update and fail with
+ * `tefBAD_AUTH` — the ledger still has the previous key at the moment it
+ * validates the signature. This waits for the state instead of sleeping an
+ * arbitrary amount.
+ */
+export async function waitForAccountState(
+  client,
+  address,
+  predicate,
+  { timeoutMs = 30_000, intervalMs = 500, label = 'account state' } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  for (;;) {
+    const res = await client.request({
+      command: 'account_info',
+      account: address,
+      ledger_index: 'validated',
+    });
+    last = res.result.account_data;
+    if (predicate(last)) return last;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for ${label} on ${address}`,
+      );
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
 }
 
 /**
@@ -53,14 +195,15 @@ export function createRunner() {
       : `  ${symbol} ${name}`);
   }
 
-  async function runTest(name, fn) {
+  async function runTest(name, fn, opts = {}) {
+    const budgetMs = opts.timeoutMs ?? TIMEOUT_MS;
     try {
       await Promise.race([
         fn(),
         new Promise((_, rej) =>
           setTimeout(
-            () => rej(new Error(`Timed out after ${TIMEOUT_MS / 1000}s`)),
-            TIMEOUT_MS,
+            () => rej(new Error(`Timed out after ${budgetMs / 1000}s`)),
+            budgetMs,
           ),
         ),
       ]);

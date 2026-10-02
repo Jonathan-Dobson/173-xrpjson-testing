@@ -18,8 +18,19 @@ has found in xrpjson (and the test scaffolding fixes that surfaced them).
 ## Setup
 
 ```bash
-npm install   # installs xrpjson@^1.0.x + xrpl@^4.6.0
+npm install   # installs xrpjson@^1.1.0 + xrpl@^4.6.0
 ```
+
+> **Sandbox note:** if `npm install` fails with `EPERM ... unlink` under
+> `_cacache/tmp`, that is a filesystem-sandbox restriction, not a corrupt
+> cache (npm's "root-owned files" message is misleading here). Point npm's
+> cache inside the workspace:
+>
+> ```bash
+> npm install --cache="$PWD/.npm-cache"
+> ```
+>
+> `.npm-cache/` is gitignored.
 
 ## Running tests
 
@@ -28,9 +39,10 @@ npm install   # installs xrpjson@^1.0.x + xrpl@^4.6.0
 npm run test:unit
 
 # Single-scope
-npm run test           # 20 tests — original happy-path sanity
+npm run test           # 20 tests  — original happy-path sanity
 npm run test:generic   # 322 tests — all 79 factories × 4 contract tests
 npm run test:families  # 236 tests — happy-path coverage per factory
+npm run test:errors    # 30 tests  — ValidationError error-contract guard
 
 # End-to-end (testnet)
 npm run test:integration
@@ -39,29 +51,45 @@ npm run test:integration
 npm run test:all
 ```
 
+The integration suites run against **XRPL Testnet** and need no credentials —
+wallets are funded from the faucet. Expect the full run to take ~30 minutes;
+suite [13] alone is ~20 because it waits out the `AccountDelete` ledger-age
+requirement (see [DIVERGENCES.md](./DIVERGENCES.md) Bug #S7).
+
 ## Test layout
 
 ```
 173-xrpjson-testing/
 ├── package.json
-├── xrpjson.mjs                  # Re-export shim with temporary `Tx` aliases
-├── test.mjs                     # Original 20-test sanity check
+├── xrpjson.mjs                   # Re-export shim with temporary `Tx` aliases
+├── test.mjs                      # 20 tests — original sanity check
 ├── tests/
-│   ├── unit-generic-harness.mjs # 322 tests — generic factory contract
-│   └── unit-families.mjs        # 236 tests — per-family happy-path
+│   ├── unit-generic-harness.mjs  # 322 tests — generic factory contract
+│   ├── unit-families.mjs         # 236 tests — per-family happy-path
+│   └── unit-error-contract.mjs   # 30 tests  — ValidationError contract
 ├── integration/
-│   ├── run-all.mjs              # 68 tests — full testnet suite
+│   ├── run-all.mjs               # full testnet suite
 │   ├── helpers.mjs
 │   ├── setup.mjs
-│   └── tests/                   # 11 scenario files (1 per family)
+│   └── tests/                    # 13 scenario files
 └── DIVERGENCES.md
+└── USER-STORIES.md
 ```
+
+Suites [12] and [13] are specified in [USER-STORIES.md](./USER-STORIES.md) —
+the tests are written against those stories, so the document is the intent
+and the test is the bug when they disagree.
+
+`13-account-admin.mjs` **must run last**. It mutates Alice's signing setup
+(regular key, then signer list) and finally deletes a throwaway account;
+`AccountDelete` only succeeds once the regular key and signer list are gone,
+so `run-all.mjs` schedules it at the end.
 
 ## Coverage matrix
 
 | Family | Factories | Unit | Integration |
 |---|---|---|---|
-| Account | `accountDelete`, `accountSet` | ✓ generic + happy | ✓ `02-account-set` |
+| Account | `accountDelete`, `accountSet` | ✓ generic + happy | ✓ `02-account-set`, `13` (delete) |
 | AMM (7) | `ammBid`, `ammClawback`, `ammCreate`, `ammDelete`, `ammDeposit`, `ammVote`, `ammWithdraw` | ✓ generic + happy | `ammCreate` only |
 | Batch | `batch` | ✓ | — |
 | Check (3) | `checkCancel`, `checkCash`, `checkCreate` | ✓ | ✓ `07-check`, `11-check-iou` |
@@ -69,23 +97,23 @@ npm run test:all
 | ConfidentialMPT (5) | `confidentialMpt*` | ✓ | — |
 | Credential (3) | `credential*` | ✓ | — |
 | Delegate | `delegateSet` | ✓ | — |
-| DepositPreauth | `depositPreauth` | ✓ | — |
+| DepositPreauth | `depositPreauth` | ✓ | ✓ `13` |
 | DID (2) | `didSet`, `didDelete` | ✓ | — |
 | Escrow (3) | `escrow*` | ✓ | ✓ `06-escrow` |
 | LedgerStateFix | `ledgerStateFix` | ✓ | — |
 | Loan (4) | `loan*` | ✓ | — |
 | LoanBroker (5) | `loanBroker*` | ✓ | — |
 | MPT (4) | `mptoken*` | ✓ | ✓ `09-mptoken` |
-| NFToken (6) | `nftoken*` | ✓ | ✓ `08-nft` |
+| NFToken (6) | `nftoken*` | ✓ | ✓ `08-nft`, `12-nft-lifecycle` |
 | Offer (2) | `offer*` | ✓ | ✓ `05-offer` |
 | Oracle (2) | `oracle*` | ✓ | — |
 | Payment | `payment` | ✓ | ✓ `01-payment-xrp`, `04-payment-iou` |
 | PaymentChannel (3) | `paymentChannel*` | ✓ | — |
 | PermissionedDomain (2) | `permissionedDomain*` | ✓ | — |
-| SetRegularKey | `setRegularKey` | ✓ | — |
-| SignerList | `signerListSet` | ✓ | — |
+| SetRegularKey | `setRegularKey` | ✓ | ✓ `13-account-admin` |
+| SignerList | `signerListSet` | ✓ | ✓ `13-account-admin` |
 | Sponsorship (2) | `sponsorship*` | ✓ | — |
-| Ticket | `ticketCreate` | ✓ | — |
+| Ticket | `ticketCreate` | ✓ | ✓ `13-account-admin` (see Bug #5) |
 | TrustSet | `trustSet` | ✓ | ✓ `03-trust-set`, `10-iou`, `11-check-iou` |
 | Vault (6) | `vault*` | ✓ | — |
 | XChain (8) | `xchain*` | ✓ | — |
@@ -94,28 +122,42 @@ npm run test:all
 
 ```js
 export * from 'xrpjson';  // 79 factories
-export { ValidationError, TransactionError } from './node_modules/xrpjson/dist/errors.js';
-export * from './node_modules/xrpjson/dist/types/flags.js';
+export { ValidationError, TransactionError } from 'xrpjson/errors';
+export * from 'xrpjson/flags';
 
 // `new XxxTx({...})` aliases (legacy migration shim)
 export { payment as PaymentTx, ... };
 ```
 
-**Note**: the deep imports to `dist/errors.js` and `dist/types/flags.js`
-work because Node's `exports` field only restricts bare-specifier package
-imports (e.g. `import x from 'xrpjson/errors'`), not relative file paths.
-These paths are **not** part of xrpjson's public surface and may break in
-future versions. A future xrpjson release should expose them via the
-`exports` map.
+**Import through this shim, not bare `xrpjson`.** `ValidationError` and the
+`*Flags` enums are **not** on the root entry point — they live on the
+`xrpjson/errors` and `xrpjson/flags` subpaths. Importing them from bare
+`xrpjson` yields `undefined`, which makes `err instanceof ValidationError`
+silently `false` and routes user input errors into a caller's "library bug"
+branch. See `DIVERGENCES.md` Bug #S6.
+
+The bare-specifier subpaths work because xrpjson declares them in its
+`exports` map (added in v1.0.5). Before that, the shim reached into
+`dist/errors.js` and `dist/types/flags.js` by relative path, which works but
+depends on internal layout.
 
 ## xrpjson fix history
 
-This project caused two xrpjson releases:
+This project caused two xrpjson releases and guards a third:
 
 - **v1.0.3** (2026-09-29): Fix `EscrowCreate.isRippleEpochUInt32` lower
   bound (was `>= RIPPLE_EPOCH_OFFSET`, now `>= 0`). Surfaced by the
   integration suite's `EscrowCreate` with `xrplNow() + 8`.
 - **v1.0.4** (2026-09-29): Fix `AccountSet` factory to require `Account`.
   Surfaced by the generic harness expecting every factory to throw on `{}`.
+- **v1.1.0** (2026-10-01): `accountSet` (TickSize) and `payment`
+  (DeliverMin without `tfPartialPayment`) now throw `ValidationError`
+  instead of a bare `Error`, matching the other 729 throw sites. Found
+  upstream via its citation audit; `tests/unit-error-contract.mjs` guards
+  it here.
+
+**Open finding:** `factory()` and `factory(null)` still throw a raw
+`TypeError` across all 79 factories — the same class of defect as the 1.1.0
+fix, one layer down. Tracked as Bug #4 in [DIVERGENCES.md](./DIVERGENCES.md).
 
 See [DIVERGENCES.md](./DIVERGENCES.md) for full details.
