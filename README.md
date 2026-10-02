@@ -51,10 +51,20 @@ npm run test:integration
 npm run test:all
 ```
 
-The integration suites run against **XRPL Testnet** and need no credentials —
-wallets are funded from the faucet. Expect the full run to take ~30 minutes;
-suite [13] alone is ~20 because it waits out the `AccountDelete` ledger-age
-requirement (see [DIVERGENCES.md](./DIVERGENCES.md) Bug #S7).
+The integration suites run against **XRPL Testnet** by default and need no
+credentials — wallets are funded from the faucet. Expect the full run to take
+~30 minutes; suite [13] alone is ~20 because it waits out the `AccountDelete`
+ledger-age requirement (see [DIVERGENCES.md](./DIVERGENCES.md) Bug #S7).
+
+Set `XRPL_WSS` to run against a different network. This matters for
+amendment-gated families: **devnet is the only public network with the `Sponsor`
+amendment enabled**, so on testnet those transactions return `temDISABLED`
+regardless of what the client encodes.
+
+```bash
+XRPL_WSS=wss://s.devnet.rippletest.net:51233 \
+  node integration/tests/15-flag-defect-verification.mjs
+```
 
 ## Test layout
 
@@ -207,9 +217,9 @@ refusing transactions the ledger accepts (Bugs #8, #9, #10, fixed in
 `146-xrpjs` `3a55880`):
 
 - `sponsorshipTransfer` rejected `spfSponsorFee`, making the documented
-  fee-and-reserve combination unconstructible. **No ledger verdict** — the
-  Sponsor amendment is disabled on testnet and this harness's `xrpl@4.6.0`
-  cannot encode the transaction type.
+  fee-and-reserve combination unconstructible. **Now ledger-verified on devnet** —
+  `terNO_PERMISSION`, not `temINVALID_FLAG`, so the ledger accepted the flags and
+  refused on business grounds. See [DIVERGENCES.md](./DIVERGENCES.md) Bug #8.
 - `mptokenIssuanceCreate` collapsed a boolean-map `Flags` to `0`, so setting
   `tfMPTCanTransfer` then being told `TransferFee` needed a flag you'd just set.
 - `nftokenMint` gated `TransferFee` on field *presence*; rippled gates on

@@ -520,11 +520,43 @@ same mask. `SponsorFlags: 0x00000003` is the documented fee+reserve form.
 
 This is `SponsorFlags`, not `Flags` — `Flags` itself is correct here.
 
-**Status:** 🟡 **Fixed in `146-xrpjs` `3a55880`, not yet released.** ⚠️ **No
-ledger verdict.** `featureSponsor` is disabled on testnet, *and* this harness's
-`xrpl@4.6.0` cannot even encode `SponsorshipTransfer`. Three implementations
-agree, which is strong, but it is not a confirmed submission. Suite [15] skips
-this with the reason stated.
+**Status:** ✅ **Fixed in `146-xrpjs` `3a55880`, not yet released, and now
+ledger-verified.** Closed 2026-10-02.
+
+**The ledger verdict.** This bug was previously unclosable: `featureSponsor` is
+disabled on testnet, *and* this harness pinned `xrpl@4.6.0`, which could not even
+name the transaction type. Both are resolved — the repo now uses `xrpl@5.3.0`
+(the first release that can encode `SponsorshipTransfer`, XLS-68 / xrpl.js PR
+#3238), and devnet has the amendment enabled (`feature` → `Sponsor: enabled:
+true`, confirmed live).
+
+```bash
+XRPL_WSS=wss://s.devnet.rippletest.net:51233 \
+  node integration/tests/15-flag-defect-verification.mjs
+# Defect 1 — sponsorshipTransfer SponsorFlags: fee + reserve
+#   ✓ factory builds SponsorFlags fee+reserve (0x03)
+#   ✓ factory still refuses a bit outside fee+reserve
+#     ledger said: terNO_PERMISSION
+#   ✓ ledger did not reject the flags (got terNO_PERMISSION)
+# Total: 11/11 passed | 0 failed | 0 skipped
+```
+
+**Why `terNO_PERMISSION` is the passing result, not a failure.** The test's real
+assertion is negative: it fails only on `temINVALID_FLAG`, which is what a wrong
+flag mask would produce. `terNO_PERMISSION` is `ter`-class — resubmittable,
+apply-phase — which means the transaction cleared preclaim. The ledger *parsed
+the flags and accepted them*, and was then refused on business grounds, because
+Bob is not a permitted sponsor for that object. `tem` (malformed) and `ter`
+(apply-phase) are different layers, and the distinction is the whole point:
+`temINVALID_FLAG` would have meant the mask is wrong.
+
+Suite [15] is now **11/11 with zero skips** (was 10/11 with 1 skip).
+
+**Caveat, stated so it is not over-read.** This confirms the *flag mask*. It does
+not confirm the sponsorship business rules end to end, because a real fee+reserve
+sponsorship needs a sponsored account and a live sponsor relationship that this
+test does not set up. The flag verdict is what this bug was about, and that part
+is now settled against a live ledger.
 
 ### Bug #9 — `mptokenIssuanceCreate` treats a boolean-map `Flags` as zero
 
@@ -692,6 +724,12 @@ reach the false pass.
 **Fix:** added the standard guard, delegating to `withStandaloneSetup(run)`.
 The suite then runs as documented: **10 passed, 0 failed, 1 skipped** (the skip
 is Defect 1, explained in Bug #8).
+
+**As of 2026-10-02 the skip is gone.** On `xrpl@5.3.0` the client can encode
+`SponsorshipTransfer`, so the check runs on testnet too — **11 passed, 0 failed,
+0 skipped**. Testnet returns `temDISABLED` because the amendment is off there;
+run against devnet for the real flag verdict, which is `terNO_PERMISSION` (see
+Bug #8).
 
 **The transferable rule.** A test file that exports a runner and is not wired
 into a caller has *no* failure signal by construction. Wiring it into
@@ -894,7 +932,9 @@ starts returning `false`.
 - **Fixed by this project:** Bugs #1, #2, #3 (v1.0.3 / v1.0.4 / v1.1.0) and
   **#6 and #7 (v1.2.0)** — the latter two verified against a live ledger by
   suite [14]. Bugs #8, #9 and #10 are fixed in `146-xrpjs` `3a55880` but
-  **not yet released**; #9 and #10 are ledger-verified by suite [15], #8 is not.
+  **not yet released**; all three are now ledger-verified by suite [15] —
+  #9 and #10 on testnet, #8 on devnet, which is the only public network with
+  the `Sponsor` amendment enabled.
 - **5 + 4 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
   (S7 covers three ledger rules, S8 the NFT metadata extractors, S9 a happy-path
   fixture that was asserting a library bug, S10 a suite with no standalone
@@ -924,8 +964,8 @@ which the [12], [13] and [14] suites are written against.
 | v1.0.4 | `AccountSet` did not require `Account` | `unit-generic-harness.mjs` |
 | v1.1.0 | `accountSet` TickSize + `payment` DeliverMin threw bare `Error` | upstream citation audit; guarded here by `unit-error-contract.mjs` |
 | v1.2.0 | `ammDeposit` enforced no mode-flag rule at all; AMM factories didn't validate flag membership | sibling-factory diff, then verified live by suite [14] |
-| *unreleased* | `sponsorshipTransfer`, `mptokenIssuanceCreate`, `nftokenMint` rejected input rippled accepts | flag-contradiction audit `3a55880`; #9/#10 verified by suite [15] |
-| *unreleased* | 7 base fields missing from all 79 factory prop types | suite [13], ADM-11, then widened by source audit |
+| *unreleased* | `sponsorshipTransfer`, `mptokenIssuanceCreate`, `nftokenMint` rejected input rippled accepts | flag-contradiction audit `3a55880`; all three verified by suite [15] (#9/#10 testnet, #8 devnet) |
+| *unreleased* | 7 base fields missing from all 79 factory prop types | suite [13], ADM-11, then widened by source audit; 10 of 79 factories fixed so far |
 | *withdrawn* | `factory()` / `factory(null)` throw `TypeError` | `unit-error-contract.mjs` § 3 — not fixable as proposed |
 
 Suites [12] and [13] found **no new xrpjson defect among the 8 factories they
