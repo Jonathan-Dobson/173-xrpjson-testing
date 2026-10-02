@@ -3,7 +3,19 @@
  * Stateless utilities + a per-suite runner factory.
  */
 
-export const TESTNET_WSS = 'wss://s.altnet.rippletest.net:51233';
+/**
+ * The ledger the integration suites run against.
+ *
+ * Defaults to XRPL Testnet. Override with XRPL_WSS to point the whole suite
+ * at another network — devnet in particular, because it is the only public
+ * network with the `Sponsor` amendment enabled (testnet has it off, so
+ * amendment-gated families can only get a `temDISABLED` verdict there).
+ *
+ *   XRPL_WSS=wss://s.devnet.rippletest.net:51233 node integration/tests/15-....mjs
+ */
+export const TESTNET_WSS =
+  process.env.XRPL_WSS ?? 'wss://s.altnet.rippletest.net:51233';
+export const NETWORK_NAME = process.env.XRPL_WSS ? 'the XRPL_WSS target' : 'XRPL Testnet';
 export const TIMEOUT_MS  = 90_000;
 
 /** Current time as an XRPL epoch integer (seconds since 1 Jan 2000). */

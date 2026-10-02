@@ -72,10 +72,10 @@ export async function run(client, alice, bob) {
 
   /**
    * Submit a payment signed by a key OTHER than the account's master key.
-   * xrpl 4.6.0's Wallet.sign() sets SigningPubKey from the signing wallet's
-   * own public key and leaves `Account` untouched, so a regular-key wallet
-   * signing an `Account: alice` tx produces exactly the wire form the ledger
-   * expects. Returns the raw submit result (success is NOT asserted).
+   * `Wallet.sign()` sets SigningPubKey from the signing wallet's own public
+   * key and leaves `Account` untouched, so a regular-key wallet signing an
+   * `Account: alice` tx produces exactly the wire form the ledger expects.
+   * Returns the raw submit result (success is NOT asserted).
    */
   async function signAs(wallet, txJson) {
     const prepared = await client.autofill(txJson);
@@ -224,7 +224,8 @@ export async function run(client, alice, bob) {
     // SigningPubKey: '' plus a one-entry Signers array.
     const partial = bob.sign(prepared, bob.classicAddress);
     // multisign() combines and validates. NOTE: client.multisign() and
-    // client.signers do not exist in xrpl 4.6.0 — older examples won't run.
+    // client.signers do not exist on the xrpl.js Client — older examples
+    // that call them will not run.
     const tx_blob = multisign([partial.tx_blob]);
     assertSuccess(await client.submitAndWait(tx_blob));
   });

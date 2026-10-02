@@ -4,12 +4,12 @@
  */
 
 import { Client } from 'xrpl';
-import { TESTNET_WSS } from './helpers.mjs';
+import { NETWORK_NAME, TESTNET_WSS } from './helpers.mjs';
 
-/** Connect to XRPL Testnet and return the connected client. */
+/** Connect to the configured XRPL network and return the connected client. */
 export async function createClient() {
   const client = new Client(TESTNET_WSS);
-  process.stdout.write('Connecting to XRPL Testnet … ');
+  process.stdout.write(`Connecting to ${NETWORK_NAME} … `);
   await client.connect();
   console.log('connected.\n');
   return client;

@@ -216,7 +216,7 @@ export async function run(client, alice, bob) {
     // CONTROL: TransferFee without the flag. This must be refused SOMEWHERE.
     // Two layers can refuse it, and both count: the ledger
     // (`temMALFORMED`, per rippled MPTokenIssuanceCreate.cpp) or xrpl.js's
-    // own client-side pre-flight, which has the same rule. xrpl.js 4.6.0
+    // own client-side pre-flight, which has the same rule. xrpl.js
     // uses a TRUTHINESS test — `if (tx.TransferFee && …)` — so its check
     // skips `TransferFee: 0` for exactly the same reason rippled's `f > 0u`
     // does. Record which layer answered, rather than pretending one is the
@@ -265,11 +265,15 @@ export async function run(client, alice, bob) {
       if (!threw) throw new Error('expected a throw for 0x04');
     });
 
-    // The ledger half. This repo pins `xrpl@4.6.0`, which predates the
-    // Sponsor amendment and cannot even name the transaction type
-    // ("Invalid field TransactionType: SponsorshipTransfer"). When that is
-    // the case we say so and leave the ledger verdict to the companion
-    // check run against `xrpl@5.3.0` (146-xrpjs devDependency).
+    // The ledger half. Since `xrpl@5.3.0` this repo can name and encode
+    // `SponsorshipTransfer` (XLS-68, xrpl.js PR #3238), so the client half
+    // no longer blocks the submission. The ledger half is still only as
+    // strong as the network: `Sponsor` is OFF on testnet, so there the
+    // answer is `temDISABLED`, not a flag verdict. Run against devnet for
+    // the real thing:
+    //
+    //   XRPL_WSS=wss://s.devnet.rippletest.net:51233 \
+    //     node integration/tests/15-flag-defect-verification.mjs
     const { result, error } = await submitRaw(client, bob, {
       TransactionType: 'SponsorshipTransfer',
       Account: bob.classicAddress,
@@ -286,9 +290,11 @@ export async function run(client, alice, bob) {
       );
     }
     if (result === 'CLIENT_REJECT') {
+      // Defensive only: 5.3.0 can encode this type. If this fires, the
+      // installed xrpl is older than package.json claims.
       skip(
         'ledger verdict for SponsorFlags: fee+reserve',
-        `xrpl@4.6.0 cannot encode SponsorshipTransfer (${error})`,
+        `installed xrpl could not encode SponsorshipTransfer (${error})`,
       );
     } else {
       await runTest(
@@ -297,9 +303,11 @@ export async function run(client, alice, bob) {
       );
       if (result === 'temDISABLED') {
         console.log(
-          '    note: Sponsor amendment is OFF on testnet, so this is a weaker\n' +
-          '          check than a full scenario. The flag verdict rests on\n' +
-          '          TxFlags.h:461 + isFeeSponsored/isReserveSponsored.',
+          '    note: Sponsor amendment is OFF on testnet, so `temDISABLED` says nothing\n' +
+          '          about the flags — it is a weaker check than a full scenario.\n' +
+          '          Re-run with XRPL_WSS pointing at devnet for the real verdict.\n' +
+          '          Until then the flag verdict rests on TxFlags.h:461 +\n' +
+          '          isFeeSponsored/isReserveSponsored.',
         );
       }
     }
