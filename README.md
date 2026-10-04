@@ -66,6 +66,20 @@ XRPL_WSS=wss://s.devnet.rippletest.net:51233 \
   node integration/tests/15-flag-defect-verification.mjs
 ```
 
+### Suite [16] has its own order
+
+```bash
+node integration/tests/16a-multisign-only-setup.mjs   # MUST run first, alone
+node integration/tests/16b-multisign-only-coverage.mjs
+node integration/tests/16c-multisign-only-refusals.mjs
+node integration/tests/16d-multisign-only-boundary.mjs # must be last of the four
+```
+
+`npm run test:integration` runs 16a first and the rest last, so the ordering
+holds there — but running a single suite by hand does not, and 16b/16c/16d will
+skip with a reason if 16a has not created the account. See
+[Suite [16]](#suite-16--the-multisign-only-account).
+
 ## Test layout
 
 ```
@@ -81,7 +95,7 @@ XRPL_WSS=wss://s.devnet.rippletest.net:51233 \
 │   ├── run-all.mjs               # full testnet suite
 │   ├── helpers.mjs
 │   ├── setup.mjs
-│   └── tests/                    # 13 scenario files
+│   └── tests/                    # 17 scenario files
 └── DIVERGENCES.md
 └── USER-STORIES.md
 ```
@@ -128,13 +142,64 @@ the old package. Once 1.3.0 ships, point it back at `xrpjson` proper.
 | Payment | `payment` | ✓ | ✓ `01-payment-xrp`, `04-payment-iou` |
 | PaymentChannel (3) | `paymentChannel*` | ✓ | — |
 | PermissionedDomain (2) | `permissionedDomain*` | ✓ | — |
-| SetRegularKey | `setRegularKey` | ✓ | ✓ `13-account-admin` |
-| SignerList | `signerListSet` | ✓ | ✓ `13-account-admin` |
+| SetRegularKey | `setRegularKey` | ✓ | ✓ `13-account-admin`, `16c`/`16d` (multisign-only) |
+| SignerList | `signerListSet` | ✓ | ✓ `13-account-admin`, `16a` (multisign-only) |
 | Sponsorship (2) | `sponsorship*` | ✓ | `15` (flag defect; ledger verdict blocked) |
-| Ticket | `ticketCreate` | ✓ | ✓ `13-account-admin` (see Bug #5) |
-| TrustSet | `trustSet` | ✓ | ✓ `03-trust-set`, `10-iou`, `11-check-iou` |
+| Ticket | `ticketCreate` | ✓ | ✓ `13-account-admin` (see Bug #5), `16b` |
+| TrustSet | `trustSet` | ✓ | ✓ `03-trust-set`, `10-iou`, `11-check-iou`, `16b` |
 | Vault (6) | `vault*` | ✓ | — |
 | XChain (8) | `xchain*` | ✓ | — |
+
+Suite [16] adds a column of its own — see below.
+
+## Suite [16] — the multisign-only account
+
+Suites [1]–[13] assume an account is controlled by a key. [16] tests the
+configuration those primitives exist to produce: **master key disabled, no
+regular key, authority held only by a 2-of-3 signer quorum.**
+
+It is split because the setup is destructive and one-way:
+
+| Suite | What it does | Run | Measured |
+|---|---|---|---|
+| `16a-multisign-only-setup.mjs` | builds the account; proves the ledger refuses to let it lock itself out | **first and alone** | 10/10 |
+| `16b-multisign-only-coverage.mjs` | the transaction types that provably **work** | after 16a | 26/27, 1 skip |
+| `16c-multisign-only-refusals.mjs` | the ones that provably **cannot**, each with a named result code | after 16b | 3/3 |
+| `16d-multisign-only-boundary.mjs` | what looks refused and is not | last of the four | 4/4 |
+
+16b's one skip is `MPTokenIssuanceSet`: the `DynamicMPT` amendment is not
+enabled on testnet, so it answers `temDISABLED`. The gate submits and reads the
+verdict rather than pre-checking, and records it as a **skip with a reason** —
+never as a pass, and never as a failure. `MPTokenIssuanceCreate` succeeding in
+the same run is consistent: it needs only `MPTokensV1`, and `TransferFee` is
+what `DynamicMPT` gates.
+
+```bash
+node integration/tests/16a-multisign-only-setup.mjs   # the other three need this
+node integration/tests/16b-multisign-only-coverage.mjs
+node integration/tests/16c-multisign-only-refusals.mjs
+node integration/tests/16d-multisign-only-boundary.mjs
+```
+
+16b/16c/16d **load** the account 16a creates and skip with a reason if it is
+missing — they never rebuild it. The state lives in
+`integration/.multisign-only.json` (gitignored: it holds signer seeds) and
+deliberately does **not** hold the master seed, which is discarded at MS-5 and
+could not be used again regardless.
+
+**16b is not idempotent, by design.** It leaves its evidence on the ledger —
+escrows, channels, tickets, MPT issuances, credentials, DIDs — because the
+objects *are* the claim. Owner count climbs each run (28 objects at the time
+of writing) and owner reserve is charged on all of them, so eventually
+`AMMCreate`, which funds its pool from the account's own balance, will answer
+`tecUNFUNDED_AMM` for a wallet that is merely poorer than the test assumes.
+The fix is to re-run 16a and mint a fresh account.
+
+The output is a specification rather than a pass count: *N* types work, *M* do
+not, each refused for a named protocol reason with the result code recorded.
+Stories in [`USER-STORIES.md`](USER-STORIES.md) § "[16] Multisign-only
+account"; the design is
+[`174-xrpl-signer/docs/multisign-only-verification.md`](../../174-xrpl-signer/docs/multisign-only-verification.md).
 
 ## xrpjson shim (`xrpjson.mjs`)
 
@@ -233,5 +298,21 @@ refusing transactions the ledger accepts (Bugs #8, #9, #10, fixed in
 
 These are the opposite shape to Bugs #6/#7, which accepted what the ledger
 refused. Both directions are defects; catching only one is a partial audit.
+
+**Open — Bug #11, all 79 factories.** Every factory serialises with
+`toJSON`'s `Object.keys(this)` walk, so an unrecognised prop reaches the wire
+without having been validated by any of the factory's rules:
+
+```
+setRegularKey({ Account, TotallyBogusField: 12345 }).toJSON()
+// → { TransactionType, Account, TotallyBogusField }
+```
+
+TypeScript catches it; **JavaScript does not**, and the package is consumed
+from JS. Suite [16b] hit it for real — `mptokenIssuanceSet({ MaximumAmount })`
+built fine and the codec refused the transaction with *"Field 'MaximumAmount'
+found in disallowed location."* — which contradicts the factory docstring's
+"there is no way to construct an invalid tx". Reproduced against published
+`xrpjson@1.2.0`. See [DIVERGENCES.md](./DIVERGENCES.md) Bug #11.
 
 See [DIVERGENCES.md](./DIVERGENCES.md) for full details.

@@ -731,3 +731,472 @@ through the faucet, so neither depends on another suite having run first. Suite
 [14] is self-contained: it funds one wallet and needs no AMM. All three share
 Alice and Bob with the rest of the integration run, so run them **last** —
 `AccountDelete` in particular should never be pointed at a shared wallet.
+
+---
+
+# [16] Multisign-only account
+
+Suites [1]–[13] all assume an account is controlled by a key, and [13] exercises
+regular keys and a signer list. What nothing has tested is the **configuration
+those primitives exist to produce**: an account whose master key is disabled,
+with no regular key, controlled only by a signer quorum.
+
+That configuration is a precise boundary rather than a "mostly works" posture,
+and **both halves are testable** — a large set of transaction types that provably
+work, and a small nameable set that provably cannot, each with a reason. A suite
+that establishes both is worth more than one that demonstrates the happy path,
+because the failures are the specification.
+
+Plan and rationale: `174-xrpl-signer/docs/multisign-only-verification.md`.
+
+## The configuration under test
+
+```
+Account       funded fresh by the faucet
+master key    DISABLED  (asfDisableMaster)
+regular key   NONE
+signer list   3 signers, weight 1 each
+quorum        2
+```
+
+**Quorum 2 of 3, not 3 of 3.** With the master disabled and no regular key there
+is no recovery path, so unanimity would model a configuration the product must
+never recommend.
+
+### The master seed is discarded at setup
+
+Once MS-5 lands, the harness does not retain the master seed. Suites 16b–16d
+cannot use it even by accident, and a suite that quietly kept it would prove
+nothing about the configuration. The state handed to later suites carries the
+account address and the three signer seeds only.
+
+## Setup, and why the order is load-bearing
+
+| # | Story | Action | Signed by |
+|---|---|---|---|
+| 1 | MS-1 | fund the account via the faucet | faucet |
+| 2 | MS-2 | one ordinary master-signed payment | master |
+| 3 | MS-3 | `SetFlag: 4` **with no signer list** — must be refused | master |
+| 4 | MS-4 | `SignerListSet` — 3 signers, weight 1, quorum 2 | master |
+| 5 | MS-5 | `SetFlag: 4` (`asfDisableMaster`) — now succeeds | master |
+
+**MS-3 is the story that proves the protection is a protocol invariant.** Every
+later suite assumes the account cannot be locked out; this is the one that
+demonstrates the ledger refuses to let it be.
+
+## MS-1 — Fund the account
+
+- **Story.** As a test author I need a fresh, funded XRPL account to restrict.
+- **Factory.** the faucet (`client.fundWallet()`).
+- **Acceptance.** The account exists on the validated ledger and holds a
+  positive balance. Its signer list is empty and `lsfDisableMaster` is unset.
+- **Why.** Suite [13] already funds its own extra wallets this way; the
+  restriction needs its own account because it is destructive and one-way.
+
+## MS-2 — A transaction before any restriction
+
+- **Story.** As a test author I want the account to be ordinary first, so that
+  every later failure is attributable to the restriction and not to setup.
+- **Factory.** `payment`.
+- **Acceptance.** `tesSUCCESS`. The balance moves by exactly the amount sent.
+- **Why.** Establishes the baseline the restricted account is measured against.
+
+## MS-3 — Disabling the master is refused while no alternative authority exists
+
+- **Story.** As an account owner I expect the ledger to stop me from disabling
+  my master key before I have configured another way to sign — because that
+  transaction would leave the account with no authority at all.
+- **Factory.** `accountSet` with `SetFlag: 4`.
+- **Acceptance.** The transaction is **refused**, with
+  **`tecNO_ALTERNATIVE_KEY`**.
+- **Ledger.** `tecNO_ALTERNATIVE_KEY`
+- **Why.** `AccountSet.cpp:315-319` — after the master-signature check at
+  `:309-313`, the ledger requires `sfRegularKey` present **or** a signer list to
+  exist:
+  ```cpp
+  if ((!sle->isFieldPresent(sfRegularKey)) && (!view().peek(keylet::signerList(accountID_))))
+  {
+      // Account has no regular key or multi-signer signer list.
+      return tecNO_ALTERNATIVE_KEY;
+  }
+  ```
+  Signed by the master (so `tecNEED_MASTER_KEY` at `:312` does not fire first),
+  with neither alternative present — hence this code and not that one.
+
+## MS-4 — Create the signer list
+
+- **Story.** As an account owner I want three keys I control to share authority
+  over my account, with any two sufficient.
+- **Factory.** `signerListSet`.
+- **Acceptance.** `tesSUCCESS`. `account_info` shows `signer_lists` with three
+  entries of weight 1 and `quorum: 2`. The master key still works.
+- **Why.** The signer list does not disable the master on its own — per
+  xrpl.org multi-signing.md an account "can have any combination of
+  authorization methods enabled". That is why MS-5 is a separate story.
+
+## MS-5 — Disable the master key
+
+- **Story.** As an account owner I want the paper key locked out so the quorum
+  holds the only authority over the account.
+- **Factory.** `accountSet` with `SetFlag: 4`.
+- **Acceptance.** `tesSUCCESS`. `lsfDisableMaster` (`0x00100000`) is set, no
+  regular key is present, and a signer list exists. Those three together are
+  the configuration; asserting the flag alone would also pass on an account
+  that still has a regular key.
+- **Why.** The master is now locked out. **Correction to the original plan:**
+  it claimed the master key is *permanently* destroyed. It is not — see
+  MS-15. The flag is revocable and nothing is burned.
+
+## MS-6 — A quorum-signed payment succeeds
+
+- **Story.** As a signer I want two of the three keys to be enough to move the
+  account's funds.
+- **Factory.** `payment`, autofilled with a signer count, signed by two
+  signers, combined with `multisign()`.
+- **Acceptance.** `tesSUCCESS`. The destination balance increases by exactly
+  the amount sent.
+- **Ledger.** `tesSUCCESS`
+- **Why.** autofill's second argument is the signer count and is **not optional**
+  for multisigned transactions; omitting it produces `telINSUF_FEE_P`, because
+  the fee must be at least `(N+1) ×` the base fee (xrpl.org multi-signing.md).
+
+## MS-7 — A single signature is refused
+
+- **Story.** As a test author I need the quorum to be a real gate, not a
+  formality.
+- **Factory.** `payment` signed by one listed signer only.
+- **Acceptance.** **Refused** with **`tefBAD_QUORUM`** (measured).
+- **Why.** Measured, not predicted. The prediction was
+  `tecINSUF_SIGNER_WEIGHT`; the ledger answers in the signature phase with a
+  `tef` code instead, before the apply-phase weight check is reached.
+
+## MS-8 — A signature from an unlisted account is refused
+
+- **Story.** As an account owner I need signatures from keys I have not
+  authorised to be worthless.
+- **Factory.** `payment`, signed by a wallet that is not in the signer list.
+- **Acceptance.** **Refused** with **`tefBAD_SIGNATURE`** (measured).
+- **Why.** Measured, not predicted — and a *different* code from MS-7, for a
+  different reason. An unlisted account has no `SignerEntry`, so its signature
+  does not resolve to an authorised signer at all, whereas in MS-7 the signer
+  is listed but under-weights the quorum. Asserting one code for both would
+  have merged two distinct causes.
+- **Note.** A master-key-only payment is **not** the right negative test here
+  even though the master is disabled — suite [13]'s ADM-6 records the same
+  trap. The constraint that matters is membership of the `Signers` array.
+
+## MS-9 — The account can never be deleted
+
+- **Story.** As an account owner I expect to have permanently forfeited the
+  right to delete my account and its transaction history.
+- **Factory.** `accountDelete`.
+- **Acceptance.** **Refused on every path.** The plan expected a single code;
+  measurement says the refusal is **layered**, and the code depends on both
+  which authority signs and how old the account is. Asserting one code would be
+  asserting a race between gates.
+
+  | path | code | gate |
+  |---|---|---|
+  | master-signed | **`tefMASTER_DISABLED`** | signature phase — the master cannot reach the apply phase at all |
+  | quorum-signed, fresh account | **`tecTOO_SOON`** | the 256-ledger age requirement |
+  | quorum-signed, aged account | `tecNO_SIGNER_LIST` | the permanent one — established by suite [13] |
+
+- **Why.** `tef` codes are signature/apply-phase entry; `tec` codes are inside
+  the apply phase. The master-signed row is the one this configuration uniquely
+  produces, and it is the meaningful half: **the paper key is locked out of the
+  one operation that would have destroyed the account's history**, regardless of
+  age or signer list.
+- **Why the age row matters.** This suite does not wait out the 256 ledgers —
+  that is suite [13]'s 20-minute job, and duplicating it would buy nothing. So
+  on a fresh account the age gate answers first and the permanent code is not
+  reachable here. MS-9b records *which* gate fired rather than pretending only
+  one exists.
+- **Still the most surprising consequence of the configuration** — a privacy
+  right permanently given up — and worth its own assertion precisely because
+  the reason it cannot be exercised here is structural, not incidental.
+
+---
+
+## Two corrections to the plan, found in the transactor source
+
+`174-xrpl-signer/docs/multisign-only-verification.md` lists five attempts that
+"must fail". Two of them do not. Both were checked against source **before** the
+suite was written, and both move between categories.
+
+### MS-10 — `asfNoFreeze` **succeeds** on a multisign-only account
+
+- **Planned as:** a refusal, because the operation is "master-only".
+- **Actually:** it is authorized. The guard is disjunctive:
+
+  ```cpp
+  // AccountSet.cpp:348-354
+  if (uSetFlag == asfNoFreeze)
+  {
+      if (!sigWithMaster && !sle->isFlag(lsfDisableMaster))
+      {
+          JLOG(j_.trace()) << "Must use master key to set NoFreeze.";
+          return tecNEED_MASTER_KEY;
+      }
+      JLOG(j_.trace()) << "Set NoFreeze flag";
+      uFlagsOut |= lsfNoFreeze;
+  }
+  ```
+
+  The rejection needs **both** "not signed with master" **and** "master not
+  already disabled". On a multisign-only account the second half is false, so
+  the transaction proceeds.
+- **Acceptance.** `tesSUCCESS`, and `lsfNoFreeze` is set. This is a **Category 1
+  (works)** story, not a refusal.
+- **Why it matters.** "Set NoFreeze" reads like an irreversible hardening step
+  that needs the paper key. It does not — and the asymmetry is the interesting
+  part: the ledger treats *disabling* the master as the irreversible act, and
+  everything after it as reachable by whoever holds the quorum.
+
+### MS-11 — The free key reset is not free, and not refused
+
+- **Planned as:** a refusal, because the zero-fee key reset is "master-only".
+- **Actually:** the transaction is accepted, but it is charged the full base
+  fee. The zero-fee tier is a *fee* rule, not an *authority* rule:
+
+  ```cpp
+  // SetRegularKey.cpp:20-39 — calculateBaseFee
+  if (publicKeyType(makeSlice(spk)))          // spk empty for a multisigned tx
+  {
+      if (calcAccountID(PublicKey(makeSlice(spk))) == id)
+      {
+          if (sle && !sle->isFlag(lsfPasswordSpent))
+              return XRPAmount{0};            // free — master key, first time only
+      }
+  }
+  return Transactor::calculateBaseFee(view, tx);
+  ```
+
+  A multisigned transaction carries `SigningPubKey: ''`, so `publicKeyType` is
+  false and the full base fee applies. The free tier additionally requires
+  `lsfPasswordSpent` to be **unset** — on this account it is set at genesis, so
+  even the master could not claim it twice.
+- **Acceptance.** Submitting a multisigned `setRegularKey` with `Fee: '0'` is
+  refused for **insufficient fee**, not for insufficient authority.
+- **Ledger.** *measure it* — expected `telINSUF_FEE_P`.
+- **Why it matters.** The distinction is the whole point. "Master-only" would
+  mean the quorum cannot do it. What is actually true is that the quorum can do
+  it, and pays full price. A product that told users the free key reset was
+  master-only would be wrong.
+
+### MS-12 — `asfAllowTrustLineClawback` is refused because the signer list occupies the owner directory
+
+- **Story.** As an account owner I want to enable trust-line clawback, so I can
+  claw back issued currency after it has been returned.
+- **Factory.** `accountSet` with `SetFlag: 16`.
+- **Acceptance.** **Refused** with **`tecOWNERS`**.
+- **Ledger.** `tecOWNERS`
+- **Why.** `AccountSet.cpp:205-209` requires an empty owner directory:
+  ```cpp
+  if (!dirIsEmpty(ctx.view, keylet::ownerDir(id)))
+  {
+      JLOG(ctx.j.trace()) << "Owner directory not empty.";
+      return tecOWNERS;
+  }
+  ```
+  and a signer list **is** an owner-directory node — `SignerListSet.cpp:337-339`:
+  ```cpp
+  // Add the signer list to the account's directory.
+  auto const page = ctx_.view().dirInsert(ownerDirKeylet, signerListKeylet, describeOwnerDir(accountID_));
+  ```
+  So multisign and clawback are **mutually exclusive by construction**, not by
+  policy.
+- **Ordering caveat, and it is load-bearing.** `AccountSet.cpp:199-203` runs
+  first and returns `tecNO_PERMISSION` if `lsfNoFreeze` is already set. Since
+  MS-10 shows `asfNoFreeze` *succeeds* here, **a suite that sets NoFreeze before
+  testing clawback would measure `tecNO_PERMISSION` and wrongly conclude the
+  owner directory is not the cause.** MS-12 must run before MS-10, and both are
+  asserted with the flag state they actually observed.
+
+---
+
+## Coverage, by group
+
+Each is its own assertion, run against the restricted account from 16a.
+Categories and source: the plan in `174-xrpl-signer`.
+
+| Group | Types | Gate |
+|---|---|---|
+| Payments | `payment` (XRP, IOU) | — |
+| DEX | `trustSet`, `offerCreate`, `offerCancel`, `amm*` | AMM is amendment-gated |
+| Escrow | `escrowCreate`, `escrowFinish`, `escrowCancel` | — |
+| Checks | `checkCreate`, `checkCash`, `checkCancel` | — |
+| NFTs | `nftokenMint`, `CreateOffer`, `AcceptOffer`, `CancelOffer`, `Burn`, `Modify` | — |
+| Payment channels | `paymentChannelCreate`, `Claim`, `Fund` | — |
+| Credentials / DID | `credentialCreate`/`Accept`/`Delete`, `didSet`/`didDelete` | amendment-gated |
+| Tokens | `mptokenIssuanceSet`, `mptokenAuthorize` | amendment-gated |
+| Tickets | `ticketCreate` + spend | relevant to the device's sequence counter |
+| Keys | `setRegularKey` | **works** — see MS-13 |
+| Account | `accountSet` (most flags), `depositPreauth`, `signerListSet` | — |
+| Batch | `batch` | amendment-gated |
+
+**`setRegularKey` working is the most important row in that table.** A quorum
+can install a regular key, so the "no regular key" half of the configuration is
+a **choice, not an invariant**. A product that implied the account was stuck
+would be wrong.
+
+## MS-13 — The quorum can install a regular key
+
+- **Story.** As a signer I want to add a regular key so a single hot device can
+  transact without a full QR round-trip per signature.
+- **Factory.** `setRegularKey`.
+- **Acceptance.** `tesSUCCESS`, and the account shows `regular_key` set.
+- **Why.** Asserted explicitly because it is the boundary case: it looks like a
+  refusal and is not.
+
+## MS-14 — The quorum can remove the regular key again
+
+- **Acceptance.** `tesSUCCESS`, `regular_key` absent. This is safe **only**
+  because a signer list exists; `SetRegularKey.cpp:69-71` returns
+  `tecNO_ALTERNATIVE_KEY` on exactly the MS-3 configuration.
+
+## MS-15 — The quorum can re-enable the master key
+
+- **Story.** As a test author I want to confirm the restriction is reversible by
+  the very parties it protects against.
+- **Factory.** `accountSet` with `ClearFlag: 4`.
+- **Acceptance.** `tesSUCCESS`, and `lsfDisableMaster` is cleared.
+- **Why.** `AccountSet.cpp:325-329` clears the flag with no signature check at
+  all, unlike the set path at `:307-323`.
+- **Why it matters — and a correction.** The original plan claimed the paper
+  seed is *permanently* useless and that MS-15 only restores the flag. That is
+  wrong in a way that matters. `lsfDisableMaster` is an ordinary **revocable
+  flag**; rippled's authority checks consult the flag, not any burned state
+  (compare `XChainBridge.cpp:134-138`, which refuses a master-key attestation
+  only while the flag is set). There is no spent-password state for the master
+  key — `lsfPasswordSpent` belongs to the *regular key* reset, and it is
+  **unset** on this account, measured.
+
+  The canonical doc is careful in exactly the way the plan was not.
+  `accountset.md:81` says only *"Disallow use of the master key pair"*, with
+  none of the permanent language it uses two rows below for `asfNoFreeze`
+  (`:88`): *"Permanently give up the ability to freeze individual trust lines
+  or disable Global Freeze. This flag can never be disabled after being
+  enabled."*
+
+  **The honest shape is an asymmetry, not a wall.** The restriction protects
+  the master key from everyone *except* the quorum, and the quorum can hand it
+  back. Meanwhile `asfNoFreeze` — which MS-10 shows the quorum *can* set —
+  genuinely can never be undone. The quorum holds a key to reverse the one
+  protection it has against itself, and only irreversible levers against
+  itself.
+
+  **A product that says "we protect your master key" is wrong.** The accurate
+  claim is narrower: *the quorum can act without the paper key, and can also
+  restore it.*
+
+## MS-16 — Amendment-gated families
+
+Vault · Loan · ConfidentialMPT · XChain · Batch.
+
+- **Acceptance.** Each is submitted once. A `temDISABLED` is recorded as
+  **skipped-with-reason**, never as passed. Anything else is a real result.
+- **Why.** Sponsorship is off on testnet and on for devnet, so a
+  `temDISABLED` says nothing about the flags. This repo's established pattern
+  is to submit and interpret the code rather than pre-check `server_info`.
+
+---
+
+## Cost of every transaction
+
+- **Acceptance.** A multisigned transaction is charged at least
+  `(signatures + 1) ×` the base fee.
+- **Why.** xrpl.org multi-signing.md. Autofill only computes the incremental
+  base fee, so the multiplier must be supplied as autofill's second argument.
+
+## Blockers
+
+- **MS-7 / MS-8 / MS-9 expected codes: RESOLVED by measurement.**
+  `tefBAD_QUORUM`, `tefBAD_SIGNATURE`, `tefMASTER_DISABLED` and `tecTOO_SOON`
+  are all recorded above. The sparse rippled mirror has no signer-weight check,
+  which is why these could not be confirmed from source — the ledger had to be
+  asked.
+- **The permanent `tecNO_SIGNER_LIST` for AccountDelete is not reachable from
+  this suite.** It needs the 256-ledger age requirement to be satisfied, which
+  is suite [13]'s 20-minute job. MS-9b records `tecTOO_SOON` and defers to
+  [13] for the aged case. Asserting `tecNO_SIGNER_LIST` here would be
+  asserting a gate that has not been reached.
+- **Signer-list rotation under the restriction is not covered.** Replacing the
+  list that is the account's only authority, on an account with no fallback, is
+  the most dangerous operation in the configuration and deserves its own suite.
+  `SignerListSet.cpp:366-367` shows the removal is refused with
+  `tecNO_ALTERNATIVE_KEY` when the master is disabled and no regular key exists
+  — so the *safe* direction is well-protected, but the replacement path is
+  untested.
+- **Quorum 3 of 3 is deliberately untested.** It is unrecoverable, and a suite
+  that accidentally proved it "works" would be a poor advertisement.
+
+---
+
+## Measured on testnet
+
+Ledger 21,26xxxx, rippled 3.4.1, 2026-10-04. Account
+`r37x7jYHHKnKKKSXQcbUSyaChqztyEdKmj`, signer list 3 × weight 1, quorum 2.
+
+| Story | Result | Source prediction |
+|---|---|---|
+| MS-3 | `tecNO_ALTERNATIVE_KEY` | `AccountSet.cpp:315-319` — **correct** |
+| MS-7 | `tefBAD_QUORUM` | predicted `tecINSUF_SIGNER_WEIGHT` — **wrong** |
+| MS-8 | `tefBAD_SIGNATURE` | predicted `tecNO_PERMISSION`/`tecINSUF_SIGNER_WEIGHT` — **wrong** |
+| MS-9a | `tefMASTER_DISABLED` | predicted `tecNO_SIGNER_LIST` — **wrong, and more informative** |
+| MS-9b | `tecTOO_SOON` | age gate fires before the signer-list gate |
+| MS-12 | `tecOWNERS` | `AccountSet.cpp:205-209` — **correct** |
+| MS-11 | `telINSUF_FEE_P` | `SetRegularKey.cpp:20-39` — **correct** |
+| MS-6, MS-13, MS-13b, MS-14, MS-15 | `tesSUCCESS` | — |
+
+**No library defect was found.** Every divergence from the plan was a
+doc-only correction, and in five of seven cases the plan was the wrong side of
+the ledger.
+
+### The recurring pattern in the wrong answers
+
+Every miss is the *same* mistake, and it is worth naming because it will recur
+in any suite written against this account:
+
+**A predicted result code usually comes from the wrong phase.** `tef` codes are
+signature and apply-phase *entry*; `tec` codes are *inside* the apply phase.
+The predictions came from reading the apply-phase check — `tecOWNERS` at
+`AccountSet.cpp:208`, the weight check behind `tecINSUF_SIGNER_WEIGHT` — and so
+guessed a `tec` where the ledger answers with a `tef` one phase earlier. The
+three `tec` predictions that were right (`tecNO_ALTERNATIVE_KEY`, `tecOWNERS`)
+are the cases where the transactor really does reach the apply phase.
+
+**Read the transactor to learn the rule; do not read it to predict the code.**
+The source settles *what is enforced*; only a run settles *where it is
+caught*.
+
+### How these were verified, and what the first run got wrong
+
+Worth recording, because two of the three "passing" results on the first run
+were passing for the wrong reason.
+
+- **A negative test that asserts "it was refused" proves almost nothing.** MS-7
+  and MS-8 both came back green on the first run — the transaction had simply
+  **expired** (`tefPAST_LEDGER_SEQ`), and the authority check never ran.
+  `expectRejected` returns a `tef*` refusal as English prose, which reads like
+  a verdict. Fixed with an explicit `LastLedgerSequence` window and
+  `assertNotExpired()`.
+- **A wide window has its own failure mode.** Raising it to 200 ledgers to fix
+  the expiry made MS-7/MS-8 hang for 90 s instead: rippled *holds* an
+  incomplete-but-still-valid transaction in the queue rather than refusing it.
+  ~40 ledgers is enough to survive a stall and short enough to still report.
+- **An underpaid transaction is queued, not refused.** `submitAndWait` on
+  `Fee: 0` blocked for the whole window and then reported an expiry that said
+  nothing about the fee. `no-wait.mjs` reads the synchronous `engine_result`
+  instead. And `accepted: true` came back *alongside* `telINSUF_FEE_P` — so
+  `accepted` is not a verdict, and an assertion reading it as one would score a
+  never-applied transaction as a pass.
+- **Two field-name traps, both silent.** The account root's flag field is
+  `Flags` (capital F); `account_data.flags` is `undefined`, so `flags & mask` is
+  `0` and a flag predicate can never fire. And `signer_lists` only appears if
+  the request passes `signer_lists: true`, at the **top level** of the result —
+  without it the field is omitted and a `waitFor` on it times out while the
+  list is sitting right there. Both are now helpers (`accountFlags()`,
+  `readSignerList()`) with the trap documented beside them.
+- **A read-too-early looks exactly like a ledger failure.** MS-4 first reported
+  "no signer list visible" while the very next story's multisigned payment
+  succeeded — which is only possible if the list was there.

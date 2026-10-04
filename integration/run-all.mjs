@@ -21,6 +21,10 @@ import { run as runNftLifecycle} from './tests/12-nft-lifecycle.mjs';
 import { run as runAccountAdmin} from './tests/13-account-admin.mjs';
 import { run as runAmmDepositFlags } from './tests/14-amm-deposit-flags.mjs';
 import { run as runFlagDefectVerification } from './tests/15-flag-defect-verification.mjs';
+import { run as runMultisignOnlySetup } from './tests/16a-multisign-only-setup.mjs';
+import { run as runMultisignOnlyCoverage } from './tests/16b-multisign-only-coverage.mjs';
+import { run as runMultisignOnlyRefusals } from './tests/16c-multisign-only-refusals.mjs';
+import { run as runMultisignOnlyBoundary } from './tests/16d-multisign-only-boundary.mjs';
 
 const client = await createClient();
 const [alice, bob] = await fundWallets(client, 2);
@@ -33,6 +37,18 @@ function accumulate(stats) {
   totals.failed  += stats.failed;
   totals.skipped += stats.skipped;
 }
+
+// [16a] Multisign-only setup — FIRST AND ALONE, before anything else.
+//
+// It is the only suite that performs a one-way, unrecoverable mutation: MS-5
+// spends the master key, after which the account's only authority is its
+// signer quorum and there is no route back. 16b/16c/16d load the account it
+// creates and skip with a reason if it is missing, so this must run first.
+//
+// It is self-contained — its own five faucet wallets, its own account — so
+// running it ahead of [1]–[15] costs the other suites nothing.
+accumulate(await runMultisignOnlySetup(client, alice, bob));
+console.log('');
 
 // [1–2] No prerequisites
 accumulate(await runPaymentXrp(client, alice, bob));
@@ -96,6 +112,22 @@ console.log('');
 // deletes a throwaway account. Both mutations are cleaned up by the suite
 // itself, but running it last keeps the blast radius off every other suite.
 accumulate(await runAccountAdmin(client, alice, bob));
+console.log('');
+
+// [16b–16d] The rest of the multisign-only boundary.
+//
+// All three run against the dedicated account 16a built, never Alice or Bob.
+//   16b  the transaction types that provably work  — Category 1
+//   16c  the ones that provably cannot, each with a named result code
+//   16d  the operations that look refused and are not
+//
+// 16d is LAST of the three because MS-15 re-enables the master key, which
+// invalidates the premise every story in 16b and 16c rests on.
+accumulate(await runMultisignOnlyCoverage(client, alice, bob));
+console.log('');
+accumulate(await runMultisignOnlyRefusals(client, alice, bob));
+console.log('');
+accumulate(await runMultisignOnlyBoundary(client, alice, bob));
 
 await client.disconnect();
 

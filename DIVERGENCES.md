@@ -158,7 +158,7 @@ through — a larger refactor than the defect justifies.
 
 ---
 
-## Bug #5 — Seven base transaction fields are missing from all 79 factory prop types (OPEN)
+## Bug #5 — Seven base transaction fields were missing from all 79 factory prop types (FIXED upstream, 79/79, verified here)
 
 **Factories:** all 79 (gap is systemic, not per-factory)
 
@@ -397,6 +397,55 @@ validator call, and `vault-clawback` is missing only the call. The work has been
 handed to a second agent. The 90 tests added here are family scoped — they are
 not a claim about the package.
 
+### Bug #5 — resolved (upstream, 79/79, measured by this harness)
+
+**Status: ✅ FIXED in `175-xrpjson`, 79/79 factories, both halves.** The upstream
+agent reports `tsc` exit 0, `lint` exit 0, 4023/4023 tests green (baseline
+2948), 150 files changed, nothing skipped. Independently re-verified here by
+counting *code shapes* rather than bare words:
+
+```
+validateBaseTransaction(  at start of line   →  79 / 79 factories
+extends BasePropsFields  (incl. via alias)   →  79 / 79 factories
+factories missing both halves                →   0
+```
+
+Two of the 79 do not match a naive `extends Omit<` grep and are correct
+anyway: `payment.ts:53` routes through a local
+`type PaymentBaseFields = Omit<BasePropsFields, …>` alias, and
+`ticket-create.ts:93-94` inlines `Omit<BasePropsFields, …>` in a multi-line
+type expression. Both were read, not assumed.
+
+**Two corrections to the original entry, both of which the original got wrong.**
+
+1. **The `Omit<BaseTransactionFields, …>` this entry recommended is inert.**
+   `BaseTransactionFields` ends with `readonly [key: string]: unknown`
+   (`src/types/base.ts:87`). That index signature widens `keyof` to
+   `string | number`, and `Omit` is defined in terms of `keyof` — so the `Omit`
+   does not subtract two keys from fourteen named members, it **collapses to a
+   bare index signature and discards every one of them**. Following the original
+   recipe would have made the type half compile and enforce nothing. The
+   upstream fix adds `BasePropsFields`, a key-remapped mapped type that filters
+   the index signature out while preserving each named field's exact type.
+2. **"38/79 already call `validateBaseTransaction`" was a false positive.** The
+   real figure was **10/79**; the other 28 matched JSDoc prose such as
+   *"inherits `validateBaseTransaction`'s `isString(Account)` check"*. The
+   runtime half was 69 factories, not 41. Two upstream workers caught this
+   independently by reading source, and the upstream agent then repeated the
+   same mistake once more (reporting "79/79 typed" from a `grep -l` that matched
+   an aspirational comment — true count 49/79) before switching to a
+   comment-stripped count. **The lesson is recorded as Bug #S12 below**,
+   because it has now cost three wrong numbers across two agents.
+
+The ordering guarantee this entry recorded still holds, and upstream verified it
+independently: `setRegularKey({ Account, RegularKey: Account })` still reports
+its own `temBAD_REGKEY` message rather than a generic base backstop, and
+`ledger-state-fix` keeps its ≥2,000,000 Special Transaction Cost floor ahead of
+the base `Fee` check.
+
+**Do not read the old "68 factories still lack…" line as current.** It records
+the state at handoff and is left in place deliberately, as the before-picture.
+
 ---
 
 ## Bug #6 — `ammDeposit` performs no flag validation; `ammWithdraw` does (FIXED in v1.2.0, verified live)
@@ -454,6 +503,8 @@ named it.
 a shared `validation/amm.ts` (`AMM_MODE_FLAG_BITS` + `MASK` + `popcount32`,
 parameterized by the flag enum) and call it from both factories. Fixes the
 defect and removes the duplication that let it through.
+
+---
 
 ---
 
@@ -632,6 +683,91 @@ project by a different route, which is worth noting: the implementation and
 the prose disagree here, and the ledger is what settles it.
 
 **Status:** 🟡 **Fixed in `3a55880`, not yet released.** Ledger-verified.
+
+---
+
+## Bug #11 — Every factory serialises unrecognised props straight to the wire (OPEN)
+
+**Factories:** all 79. Systemic, not per-factory.
+
+**Found by:** suite [16b], as collateral damage from a real MPT test. Not a
+theoretical review finding — it broke a test, cost a diagnostic cycle, and was
+reproduced independently on the **published v1.2.0** (see below), so it is
+shipped, not merely in progress.
+
+**The mechanism.** Every one of the 79 factories serialises with the same
+shape (`buildFrozenTx` spreads `props` wholesale, then `toJSON` walks every
+key):
+
+```ts
+// 79 / 79 factories
+toJSON(this) {
+  const json: Record<string, unknown> = {};
+  for (const k of Object.keys(this)) { … json[k] = v; }
+  return json;
+}
+```
+
+Each factory validates a **known, closed set** of fields — meticulously, with
+per-field and cross-field rules. But nothing rejects a field that is *not* in
+that set. `buildFrozenTx` does
+`Object.freeze({ TransactionType: txType, ...fields })`, so an unknown key
+arrives on the object, and `toJSON` copies it into the serialised transaction
+without having been validated at all.
+
+**Why this contradicts the package's own contract.** Every factory docstring
+states:
+
+> "Validation happens at construction; there is no way to construct an invalid
+> tx."
+
+That is true of the fields a factory knows about and false of the fields it
+does not. A consumer can build a transaction the ledger will always reject.
+
+**Reproduced here, against published `xrpjson@1.2.0`** (four factories, four
+distinct unknown keys, all silently accepted):
+
+```
+setRegularKey  : TransactionType,Account,TotallyBogusField
+payment         : TransactionType,Account,Destination,Amount,Nope
+mptokenIssueSet : TransactionType,Account,MPTokenIssuanceID,TransferFee,MaximumAmount
+accountSet      : TransactionType,Account,TransferRate,Bogus
+```
+
+**The live consequence, from 16b.** `MaximumAmount` is an
+`MPTokenIssuanceCreate` field. `MPTokenIssuanceSet` has no such field —
+xrpl.js's own `MPTokenIssuanceSet` interface (`MPTokenIssuanceSet.d.ts`)
+declares `MPTokenIssuanceID`, `Holder`, `IssuerEncryptionKey`,
+`AuditorEncryptionKey`, `Flags`, `MPTokenMetadata`, `TransferFee`,
+`ImmutableFlags`, `DomainID` and nothing else. The factory built the
+transaction without complaint, and rippled's codec rejected it at submit time:
+
+```
+Field 'MaximumAmount' found in disallowed location.
+```
+
+That is a confusing submit-time error where a `ValidationError` at
+construction is the entire point of the package.
+
+**Severity — and the reason it is narrower than it looks.** TypeScript catches
+every instance of this: an unknown prop is not assignable to the props
+interface, so `tsc` fails. **JavaScript does not.** The package is published as
+ESM and consumed from JavaScript, and this repository's own harness is
+JavaScript. So the exposure is real but confined to untyped consumers.
+
+**Suggested fix upstream.** Enforce a closed key set once, in
+`buildFrozenTx` (`src/fp/shape.ts:51`), rather than 79 times in the factories —
+pass the known-key set in and reject anything else with a `ValidationError`
+naming the offending key. This is behaviour-changing across the whole package:
+any current consumer relying on a silently-ignored prop will start getting an
+error. That is why it was **not** folded into the Bug #5 sweep, and why it
+deserves its own change rather than riding along with it.
+
+Note the adjacency to Bug #5: both are the same root cause, *no closed
+field-set enforcement*. Bug #5 fixed the seven fields the package forgot to
+declare; this is the inverse error — fields the package correctly refuses to
+declare, but then fails to reject at runtime.
+
 
 ---
 
@@ -872,6 +1008,152 @@ are **not** on the root entry point, only on `xrpjson/errors` and
 makes `err instanceof ValidationError` silently `false` — the same
 mis-routing Bug #3 is about, arrived at from the other direction.
 
+### Bug #S11 — `MPTokenIssuanceID` is in neither the meta nor the ledger index
+
+Found writing suite [16b]. This is an **xrpl.js** gap, not an xrpjson one, but
+it is the same species as Bug #S8: a generic reader hands you a plausible value
+of the wrong shape, and the failure surfaces several steps later as a `tem*` or
+`tec*` code that points at the wrong thing.
+
+**What is actually there.** All three facts below were measured against testnet
+(rippled 3.4.1), not inferred from source:
+
+1. `MPTokenIssuanceCreate`'s `CreatedNode.NewFields` contains exactly
+   `Flags`, `Issuer`, `Sequence`. **There is no id field.** So
+   `extractCreatedIndex` correctly falls through to `LedgerIndex` and returns
+   64 hex characters.
+2. `MPTokenIssuanceID` is a `Hash192` — 24 bytes, **48 hex characters** — per
+   `ripple-binary-codec/dist/enums/definitions.json`:
+   `["MPTokenIssuanceID",{...,"type":"Hash192"}]`. The `LedgerIndex` is a
+   `Hash256`. The two cannot be the same string.
+3. Truncating the `LedgerIndex` to 48 characters is **wrong**, and this is the
+   trap: the two hashes share no bytes. `MPTokenAuthorize` with a truncated id
+   against a freshly created issuance answered `tecOBJECT_NOT_FOUND`. A prefix
+   *looks* like a legitimate derivation and is not one.
+
+**Where it really lives.** The id is a field on the ledger object, returned by
+`ledger_entry` as `mpt_issuance_id`:
+
+```js
+const res = await client.request({
+  command: 'ledger_entry',
+  ledger_entry_type: 'mpt_issuance',
+  index: /* the CreatedNode's LedgerIndex */,
+});
+res.result.node.mpt_issuance_id;  // 48 hex chars
+```
+
+**The xrpl.js gap that makes this necessary.** xrpl.js's own interface for
+this object omits the field entirely —
+`node_modules/xrpl/dist/npm/models/ledger/MPTokenIssuance.d.ts` declares
+`LedgerEntryType`, `Flags`, `Issuer`, `Sequence`, `OutstandingAmount`,
+`OwnerNode` and the rest, but **no** `mpt_issuance_id`, even though rippled
+returns it on the wire. A TypeScript consumer of `MPTokenIssuance` therefore
+cannot reach the one field every MPT transaction requires as its primary key,
+without dropping to a raw `client.request` and asserting the shape by hand.
+(`MPToken.d.ts` *does* declare `MPTokenIssuanceID`, so the omission is
+specific to the issuance object.)
+
+**Fix:** `integration/helpers.mjs` gained
+`extractMPTokenIssuanceId(client, response)`, which reads the object back and
+throws rather than returning a value of unknown provenance. Suite [16b] calls
+it and no longer substitutes a made-up 48-hex id.
+
+**Status:** ✅ Fixed in the harness. The xrpl.js interface gap is worth an
+upstream report; it is not an xrpjson defect.
+
+### Bug #S12 — A bare-word `grep` for a function name measures prose, not code
+
+**This one has now produced three wrong numbers across two agents.** Recording
+it because the failure is invisible: the number looks like an answer, the brief
+reads like ground truth, and it propagates into someone else's work.
+
+1. A briefing asserted **"38/79 factories already call
+   `validateBaseTransaction`"**, derived from `grep -l validateBaseTransaction`.
+   The true figure was **10/79**. The other 28 matched **JSDoc prose** —
+   comments like *"inherits `validateBaseTransaction`'s `isString(Account)`
+   check"*. Twenty-eight files, confidently wrong. Both upstream workers caught
+   it independently by reading source; the gap was ~30% of the job.
+2. The upstream agent then **repeated the identical mistake** mid-task,
+   reporting "79/79 factories typed" from `grep -l BasePropsFields`. That
+   matched an *aspirational comment* — the very comment explaining the fix.
+   True count at the time: **49/79**. A worker refused its next task because the
+   premise did not hold.
+3. The final audit now strips comments before counting.
+
+**Why it keeps happening.** `grep -l <name>` answers "does this string appear
+anywhere in this file", which is a strictly weaker question than "is this
+called". In a codebase with a documented-divergences convention, *most*
+factories legitimately mention the validator in prose — the convention
+guarantees it. The files most likely to match a bare-word grep are the files
+with the best documentation.
+
+**The rule.** Anchor the pattern to code shape, then print the matching lines
+and read them before quoting any number:
+
+| Looking for | Pattern |
+|---|---|
+| a call site | `^[[:space:]]*fnName\(` |
+| an import | `^import .*\{ fnName` |
+| an `extends` clause | match the whole clause — a multi-line `extends Omit<\n  Base,\n  …\n>` will not match a one-line grep |
+| a field on an interface | `^[[:space:]]*readonly fnName[?]?:` |
+
+**Corollary for delegating work.** When a briefing hands me an inventory, spot
+check the cheapest claim in it before passing it to anyone else — *especially*
+when the number is already labelled "measured, do not re-derive". Two of these
+three were labelled exactly that way. "Measured" in a briefing is a claim about
+someone's process, not a fact about the code.
+
+**Corollary for the harness.** Strip comments before counting, mechanically, not
+by remembering to.
+
+### Bug #S13 — `AccountSet` has two flag namespaces, and mixing them succeeds
+
+Found writing suite [16b]. Cost one diagnostic cycle and nearly produced a false
+"Bug #11 in the wild" — worth writing down because **nothing errors**.
+
+`AccountSet` carries two unrelated flag fields, and they use *different
+encodings*:
+
+| Field | Encoding | xrpl.js enum | Example |
+|---|---|---|---|
+| `SetFlag` | **1-based table index**, not a bitmask | `AccountSetAsfFlags` | `asfDefaultRipple = 8` |
+| `Flags` | **bitmask** | `AccountSetTfFlags` | `tfRequireDestTag = 65536` |
+
+The trap is that neither field rejects the other's encoding. Measured on fresh
+faucet wallets against testnet:
+
+```
+accountSet({ Account, Flags: 0x00010000 })  ->  tesSUCCESS, root Flags -> 0x00020000
+accountSet({ Account, Flags: 8 })          ->  temINVALID_FLAG
+accountSet({ Account, SetFlag: 8 })        ->  tesSUCCESS, root Flags -> 0x00800000
+```
+
+Line 1 is the hazard. `0x00010000` is the legal `tfRequireDestTag` bit, so the
+transaction is valid and *changes real account state* — it set
+`lsfRequireDestTag` on the root. I had meant to set Default Ripple, silently
+set something else instead, and the AMM test I was fixing stayed broken for a
+completely different reason than the one I was chasing.
+
+**Do not read a flag off a doc page without its namespace.** The account-root
+values (`LedgerFormats.h:138-152`) are a *third* encoding again, and they do not
+match the `asf*` indices:
+
+```
+lsfPasswordSpent   0x00010000      lsfDisableMaster  0x00100000
+lsfRequireDestTag  0x00020000      lsfNoFreeze       0x00200000
+lsfRequireAuth     0x00040000      lsfGlobalFreeze   0x00400000
+lsfDisallowXRP     0x00080000      lsfDefaultRipple  0x00800000
+lsfDepositAuth     0x01000000
+```
+
+Note `lsfDefaultRipple` is `0x00800000`, **not** `0x00010000` — the value most
+third-party summaries still quote. Measured: `SetFlag: 8` lands `0x00800000`.
+
+Not an xrpjson defect — the factory's types are correct and the ledger enforces
+both namespaces. This is recorded as a harness trap because the failure mode is
+a *successful* transaction that does something other than what was asked.
+
 ---
 
 ## Coverage observations (no bugs, just learnings)
@@ -950,15 +1232,21 @@ starts returning `false`.
 
 ## Summary
 
-- **8 real bugs** in xrpjson found — 5 released (v1.0.3, v1.0.4, v1.1.0,
-  v1.2.0), **3 fixed but unreleased** (Bugs #8, #9, #10), 1 open, 1 withdrawn:
-  - **Bug #5 (open)** — 7 base fields (`Memos`, `SourceTag`,
+- **10 real bugs** in xrpjson found — 6 released (v1.0.3, v1.0.4, v1.1.0,
+  v1.2.0), **4 fixed but unreleased** (Bugs #5, #8, #9, #10), 1 open, 1 withdrawn:
+  - **Bug #5 (fixed, unreleased)** — 7 base fields (`Memos`, `SourceTag`,
     `LastLedgerSequence`, `AccountTxnID`, `NetworkID`, `Delegate`,
     `TicketSequence`) are declared in `BaseTransactionFields` and validated by
-    `validateBaseTransaction`, but appear in **0 of 79** factory prop types,
-    and the validator is never called by anything in the package. A
-    type-surface and validation-coverage gap — **all seven work at runtime**;
-    `TicketSequence` is the one with real user impact.
+    `validateBaseTransaction`, but appeared in **0 of 79** factory prop types,
+    and the validator was called by **10 of 79** (not 38 — that figure was a
+    `grep` matching JSDoc prose; see Bug #S12). Fixed **79/79 on both halves**,
+    independently re-verified here. The originally-recommended
+    `Omit<BaseTransactionFields, …>` was itself inert and had to be replaced
+    with a key-remapped `BasePropsFields`.
+  - **Bug #11 (open, new)** — all 79 factories serialise unrecognised props
+    straight to the wire via `toJSON`'s `Object.keys(this)` walk, bypassing
+    every validation rule. Reproduced on published `xrpjson@1.2.0`. TypeScript
+    catches it; **JavaScript does not**, and JS is how the package is consumed.
   - **Bug #4 (withdrawn)** — `factory()` / `factory(null)` throw `TypeError`.
     Re-measured and taken back: the proposed fix cannot work, because
     `require(props.Account, …)` dereferences at the call site, before a guard
@@ -969,10 +1257,12 @@ starts returning `false`.
   **not yet released**; all three are now ledger-verified by suite [15] —
   #9 and #10 on testnet, #8 on devnet, which is the only public network with
   the `Sponsor` amendment enabled.
-- **5 + 4 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
+- **12 test-scaffolding bugs** in 173-xrpjson-testing found and fixed
   (S7 covers three ledger rules, S8 the NFT metadata extractors, S9 a happy-path
   fixture that was asserting a library bug, S10 a suite with no standalone
-  entry point).
+  entry point, S11 the `MPTokenIssuanceID` derivation, S12 the
+  `grep`-matches-prose measurement error — the last has now produced **three
+  wrong numbers across two agents** and is the highest-leverage lesson here).
 - **Coverage expanded** from 7 (unit) + 11 (integration) test scenarios to:
   - 20 unit scenarios (test.mjs)
   - 322 generic factory contract scenarios (unit-generic-harness.mjs)

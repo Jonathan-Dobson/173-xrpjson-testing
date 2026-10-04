@@ -69,6 +69,92 @@ export async function expectRejected(submitFn) {
   }
 }
 
+/**
+ * Autofill, collect multisignatures, combine, and submit.
+ *
+ * Two things here are not optional and both fail in confusing ways:
+ *
+ * 1. **autofill's second argument is the signature count.** xrpl.org
+ *    multi-signing.md: "The transaction cost (specified in the Fee field) must
+ *    be at least (N+1) times the normal transaction cost, where N is the
+ *    number of signatures provided." Autofill only computes the incremental
+ *    base fee, so omitting it produces telINSUF_FEE_P.
+ *
+ * 2. **LastLedgerSequence is set explicitly.** Autofill's default window is
+ *    ~20 ledgers (~80s on testnet), which a stalled wait or a multi-signature
+ *    round trip can burn. It is not raised much further than that, though:
+ *    rippled HOLDS an incomplete-but-still-valid transaction in the queue
+ *    rather than rejecting it, so a very wide window turns a fast, informative
+ *    refusal into a multi-minute hang. ~40 ledgers is enough to survive a
+ *    stall and short enough that a missing signature is still reported.
+ *
+ * Returns the raw response — success is NOT asserted, so this is usable for
+ * the negative cases too.
+ */
+export async function submitMultisigned(client, txJson, signers, {
+  count = signers.length,
+  windowLedgers = 40,
+} = {}) {
+  const { result } = await client.request({ command: 'ledger_current' });
+  const prepared = await client.autofill(
+    { ...txJson, LastLedgerSequence: result.ledger_current_index + windowLedgers },
+    count,
+  );
+  const partials = signers.map((w) => w.sign(prepared, w.classicAddress).tx_blob);
+  return client.submitAndWait((await import('xrpl')).multisign(partials));
+}
+
+/**
+ * Read an account's signer list.
+ *
+ * Two things bite here, and both are silent — a wrong guess yields
+ * `undefined` rather than an error:
+ *
+ *  - The request must pass `signer_lists: true`. Without it, rippled omits the
+ *    field entirely, so `signer_lists?.length` is `undefined > 0` → false, and
+ *    a `waitFor` on it times out while the list is sitting right there.
+ *  - The list comes back at the TOP level of the result, not under
+ *    `account_data`.
+ *
+ * Also note the account root's flag field is `Flags` (capital F). `flags` is
+ * `undefined`, so `d.flags & 0x00100000` is `NaN & mask` → 0, and a predicate
+ * testing for a flag never becomes true.
+ */
+export async function readSignerList(client, address) {
+  const res = await client.request({
+    command: 'account_info',
+    account: address,
+    ledger_index: 'validated',
+    signer_lists: true,
+  });
+  return res.result.signer_lists?.[0] ?? null;
+}
+
+/** The account root flags bitfield. Capital F — `flags` is undefined. */
+export function accountFlags(accountData) {
+  return accountData.Flags ?? 0;
+}
+
+/**
+ * Assert a rejection was an AUTHORITY refusal, not an expiry.
+ *
+ * `expectRejected` returns the thrown message verbatim for `tef*`, so an
+ * expired transaction comes back as English prose rather than a result code.
+ * That is easy to mistake for a real verdict, and it is how two tests in
+ * suite [16] passed while measuring nothing.
+ */
+export function assertNotExpired(result, story) {
+  const text = String(result ?? '');
+  if (/tefPAST_LEDGER_SEQ|latest ledger sequence/i.test(text)) {
+    throw new Error(
+      `${story}: the transaction EXPIRED rather than being refused on ` +
+      `authority grounds (${text}). Raise the LastLedgerSequence window — ` +
+      `this test has proven nothing.`,
+    );
+  }
+  return result;
+}
+
 /** Extract the LedgerIndex of a newly created ledger entry by type. */
 export function extractCreatedIndex(response, ledgerEntryType) {
   const node = response.result.meta.AffectedNodes
@@ -76,6 +162,28 @@ export function extractCreatedIndex(response, ledgerEntryType) {
   return node?.CreatedNode?.NewFields?.CheckID
       ?? node?.CreatedNode?.NewFields?.NFTokenID
       ?? node?.CreatedNode?.LedgerIndex;
+}
+
+/**
+ * Same, but FAILS LOUDLY when the node is not found.
+ *
+ * `extractCreatedIndex` returns `undefined` for a type it does not recognise,
+ * which turns into a confusing failure three stories later ("no channelId from
+ * the prior test"). DIVERGENCES.md Bug #S8 is the same class of bug and it
+ * cost a 17/17 failure once already. If the transaction succeeded but the node
+ * is not there, say so and list what WAS there.
+ */
+export function requireCreatedIndex(response, ledgerEntryType, story) {
+  const index = extractCreatedIndex(response, ledgerEntryType);
+  if (index) return index;
+  const seen = (response.result.meta.AffectedNodes ?? [])
+    .map(n => n.CreatedNode?.LedgerEntryType ?? n.ModifiedNode?.LedgerEntryType ?? '?')
+    .join(', ') || '(none)';
+  throw new Error(
+    `${story}: the transaction returned ${response.result.meta.TransactionResult} ` +
+    `but no CreatedNode of type "${ledgerEntryType}" was in AffectedNodes. ` +
+    `Saw: ${seen}`,
+  );
 }
 
 /**
@@ -107,6 +215,58 @@ export function extractOfferIndex(response) {
   const node = response.result.meta.AffectedNodes
     .find(n => n.CreatedNode?.LedgerEntryType === 'NFTokenOffer');
   return node?.CreatedNode?.LedgerIndex;
+}
+
+/**
+ * Resolve the MPTokenIssuanceID of a freshly created MPTokenIssuance.
+ *
+ * The ID is not in the transaction's meta, and it is not the object's
+ * LedgerIndex. Both of those were measured against testnet, not assumed:
+ *
+ *   - `CreatedNode.NewFields` for an MPTokenIssuance holds only
+ *     `Flags` / `Issuer` / `Sequence`. There is no ID field at all, so
+ *     `extractCreatedIndex` correctly falls through to `LedgerIndex` and
+ *     hands back 64 hex characters.
+ *   - `MPTokenIssuanceID` is a `Hash192` — 24 bytes, 48 hex — per
+ *     ripple-binary-codec's `definitions.json`. The LedgerIndex is a Hash256.
+ *   - Truncating the LedgerIndex to 48 chars is WRONG. It looks plausible
+ *     and is not: MPTokenAuthorize answered `tecOBJECT_NOT_FOUND` for a
+ *     freshly created issuance. The two hashes share no bytes; the ID is a
+ *     separate derivation, not a prefix.
+ *
+ * So the only way to get it is to read the object back. `ledger_entry` with
+ * `ledger_entry_type: 'mpt_issuance'` returns it as `mpt_issuance_id`.
+ *
+ * Note: xrpl.js's own `MPTokenIssuance` TypeScript interface omits
+ * `mpt_issuance_id` even though rippled returns it on the wire — see
+ * DIVERGENCES.md. That is why this reads the raw `request` result rather
+ * than going through a typed accessor.
+ *
+ * @param {object} client   connected xrpl Client
+ * @param {object} response the MPTokenIssuanceCreate submitAndWait result
+ * @returns {Promise<string>} the 48-hex MPTokenIssuanceID
+ */
+export async function extractMPTokenIssuanceId(client, response) {
+  const index = extractCreatedIndex(response, 'MPTokenIssuance');
+  if (!index) {
+    throw new Error(
+      'MPTokenIssuanceCreate returned no MPTokenIssuance CreatedNode — ' +
+      'cannot resolve its MPTokenIssuanceID',
+    );
+  }
+  const res = await client.request({
+    command: 'ledger_entry',
+    ledger_entry_type: 'mpt_issuance',
+    index,
+  });
+  const id = res.result.node?.mpt_issuance_id;
+  if (!id) {
+    throw new Error(
+      `ledger_entry returned the MPTokenIssuance at ${index} but no ` +
+      `mpt_issuance_id. Saw: ${JSON.stringify(res.result.node)}`,
+    );
+  }
+  return id;
 }
 
 /** Current XRP balance of `address`, in drops, as a BigInt. */
