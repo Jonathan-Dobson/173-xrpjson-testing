@@ -21,6 +21,15 @@ has found in xrpjson (and the test scaffolding fixes that surfaced them).
 npm install   # installs xrpjson@^1.2.0 + xrpl@^4.6.0
 ```
 
+The manifest allows `xrpjson@1.3.0`, but **`npm install` will not move to it** —
+`package-lock.json` pins the exact resolved version, so npm reports "up to
+date" and leaves the old copy in `node_modules`. To actually test the current
+release:
+
+```bash
+npm update xrpjson   # or: npm install xrpjson@1.3.0
+```
+
 > **Sandbox note:** if `npm install` fails with `EPERM ... unlink` under
 > `_cacache/tmp`, that is a filesystem-sandbox restriction, not a corrupt
 > cache (npm's "root-owned files" message is misleading here). Point npm's

@@ -446,6 +446,41 @@ the base `Fee` check.
 **Do not read the old "68 factories still lack…" line as current.** It records
 the state at handoff and is left in place deliberately, as the before-picture.
 
+### Soak of v1.3.0 — the fix does not refuse anything valid
+
+The question the fix had to answer before anyone could trust it: 58 factories
+became strictly validating, and the ledger is the only authority on whether the
+tightened checks refuse anything rippled accepts.
+
+**Unit — all green on 1.3.0:**
+
+| Suite | Result | What it proves |
+|---|---|---|
+| `test:families` | **236 / 236** | every per-family happy-path fixture still constructs |
+| `test:generic` | **322 / 322** | every factory still honours the 79-way contract sweep |
+| `test:errors` | **30 / 30** | the `ValidationError` shape and boundaries are unchanged |
+
+The 236 is the direct answer. It is the same forward-compatibility check the
+Bug #5 entry called for, now run against the **shipped** version rather than a
+working tree.
+
+**Integration — 172 / 173, 0 failed, 1 skipped**, live testnet, rippled 3.4.1,
+across all 16 suites. The skip is `MPTokenIssuanceSet` under
+`AMENDMENT_OFF: temDISABLED` — the `DynamicMPT` amendment is not enabled on
+testnet, so the ledger never judges the transaction. Recorded as a skip with a
+reason, never as a pass and never as a failure.
+
+**Verdict: no regression.** Nothing in the 79 factories began rejecting input
+the harness considered valid, and every live-ledger story that could be affected
+by stricter construction-time checks passed on a real ledger.
+
+**A note on installing it.** `xrpjson` is pinned `"^1.2.0"` in this repo, and
+`^1.2.0` permits 1.3.0 — but `npm install` does **not** upgrade to it. The
+lockfile pins the exact resolved version, so `npm install` reports
+"up to date" and leaves 1.2.0 in `node_modules`. Use `npm update xrpjson` (or
+bump the lockfile deliberately). Anyone who concludes the soak cannot be run
+from reading the manifest alone is wrong for the wrong reason.
+
 ---
 
 ## Bug #6 — `ammDeposit` performs no flag validation; `ammWithdraw` does (FIXED in v1.2.0, verified live)
@@ -734,6 +769,107 @@ mptokenIssueSet : TransactionType,Account,MPTokenIssuanceID,TransferFee,MaximumA
 accountSet      : TransactionType,Account,TransferRate,Bogus
 ```
 
+**The expensive shape is a real field used on the wrong type.** That is the one
+worth writing a test against, because nothing at the call site looks wrong:
+
+```js
+// DestinationTag is a real XRPL field — on Payment, not on SetRegularKey.
+setRegularKey({ Account, DestinationTag: 42 }).toJSON();
+//   → { TransactionType, Account, DestinationTag }
+```
+
+The pure-typo case (`TotallyBogusField`) is a nuisance. This one is a silent
+misroute: a correct-looking property object, dropped onto a transaction that has
+no such field, producing a wire format the codec will reject.
+
+**The case that actually started this, from 16b.** `MaximumAmount` is an
+`MPTokenIssuanceCreate` field. `MPTokenIssuanceSet` has no such field —
+xrpl.js's own `MPTokenIssuanceSet` interface (`MPTokenIssuanceSet.d.ts`)
+declares `MPTokenIssuanceID`, `Holder`, `IssuerEncryptionKey`,
+`AuditorEncryptionKey`, `Flags`, `MPTokenMetadata`, `TransferFee`,
+`ImmutableFlags`, `DomainID` and nothing else. The factory built the
+transaction without complaint, and rippled's codec rejected it at submit time:
+
+```
+Field 'MaximumAmount' found in disallowed location.
+```
+
+That is a confusing submit-time error where a `ValidationError` at construction
+is the entire point of the package.
+
+### Withdrawn sub-claim — `CredentialIDs` on `AccountDelete`
+
+An upstream write-up of this bug offered a second "doubly wrong" example:
+
+> `accountDelete({ Account, Destination, CredentialIDs: ['A'.repeat(64)] })`
+> — `CredentialIDs` is not a field on `AccountDelete` **and** the value fails
+> `AccountDelete`'s own credential validation.
+
+**It is not a defect, and the claim is wrong.** `CredentialIDs` is a declared,
+documented and validated field of `AccountDelete`:
+
+```
+account-delete.ts:16    "`Credentials` — introduces the optional `CredentialIDs` field"
+account-delete.ts:108   CredentialIDs?: string[] | undefined;
+account-delete.ts:151   // ── CredentialIDs ── optional array; bounds + entry-shape + uniqueness
+```
+
+Executed here, the transaction constructs correctly and is a valid
+`AccountDelete` under the `Credentials` amendment. The write-up contradicted the
+docstring in the very file it was citing, two lines above where the claim was
+made.
+
+Recorded because the example was the one carrying the "this bug is worse than it
+looks" argument. A wrong entry in this file costs more than a missing one.
+
+### Scope narrowed by v1.3.0
+
+The Bug #5 fix reworked the props types onto `BasePropsFields`, which drops the
+trailing `[key: string]: unknown` index signature. **TypeScript now rejects
+both repro shapes at compile time** — `TS2353` for the `MaximumAmount` case
+included. So the exposure is **JavaScript callers only**: no static type
+checking. That is how this harness calls the package, and how most consumers
+will, but it is not a hole every TypeScript user is walking around with.
+
+### Why this is not a one-line fix
+
+The obvious fix is a known-keys check in `buildFrozenTx`, written once for all
+79. The difficulty is that a correct allowlist is **per transaction type**, not
+global — `MaximumAmount` is legitimate on `MPTokenIssuanceCreate` and invalid on
+`MPTokenIssuanceSet`, so one global field list would not catch the case above.
+Authoring 79 hand-maintained key sets across ~106 field names needs a source of
+truth the repo does not have; `xrpl.js` is a **devDependency only** and using it
+would break the zero-runtime-dependency property.
+
+**The tradeoff that actually blocks it.** `BaseTransactionFields` carries
+`readonly [key: string]: unknown` *deliberately* (`src/types/base.ts:100`),
+documented as *"Allow additional fields for forward-compatibility."* XRPL ships
+new transaction fields continuously via amendments. A strict allowlist converts
+that escape hatch into a hard throw: a JavaScript consumer passing a
+legitimately-new field the library does not model yet would be rejected until
+the library ships a release. That is a forward-compatibility regression traded
+against typo-catching, and it is a product decision rather than a bug fix.
+
+**A design that avoids the tradeoff, if it is pursued later.** Invert the index:
+
+```
+fieldName → Set<TransactionType>
+```
+
+Reject a key **only if** it appears in that index *and* this type is absent from
+the set. Three properties follow:
+
+1. It catches the case that motivated this entry — a known field on the wrong
+   type.
+2. **Forward-compatibility is preserved exactly.** A field not yet in the index
+   is genuinely new, and passes. The `base.ts:100` escape hatch keeps working.
+3. The cost is **one** ~106-row table rather than 79 lists, and it is
+   generatable from the package's own props interfaces — the source of truth is
+   already in the repo, and no runtime dependency is introduced.
+
+This is strictly cheaper than either an allowlist or a hand-maintained
+deny-list, and it dissolves the decision that currently blocks the fix.
+
 **The live consequence, from 16b.** `MaximumAmount` is an
 `MPTokenIssuanceCreate` field. `MPTokenIssuanceSet` has no such field —
 xrpl.js's own `MPTokenIssuanceSet` interface (`MPTokenIssuanceSet.d.ts`)
@@ -749,25 +885,15 @@ Field 'MaximumAmount' found in disallowed location.
 That is a confusing submit-time error where a `ValidationError` at
 construction is the entire point of the package.
 
-**Severity — and the reason it is narrower than it looks.** TypeScript catches
-every instance of this: an unknown prop is not assignable to the props
-interface, so `tsc` fails. **JavaScript does not.** The package is published as
-ESM and consumed from JavaScript, and this repository's own harness is
-JavaScript. So the exposure is real but confined to untyped consumers.
-
-**Suggested fix upstream.** Enforce a closed key set once, in
-`buildFrozenTx` (`src/fp/shape.ts:51`), rather than 79 times in the factories —
-pass the known-key set in and reject anything else with a `ValidationError`
-naming the offending key. This is behaviour-changing across the whole package:
-any current consumer relying on a silently-ignored prop will start getting an
-error. That is why it was **not** folded into the Bug #5 sweep, and why it
-deserves its own change rather than riding along with it.
+**Suggested fix upstream.** Do **not** fold this into the Bug #5 sweep — it
+changes behaviour for every consumer who relies on a silently-ignored prop, and
+the design question above is a product decision, not a mechanical fix. It is
+recorded in `xrpjson`'s CHANGELOG under 1.3.0 "Known issue".
 
 Note the adjacency to Bug #5: both are the same root cause, *no closed
 field-set enforcement*. Bug #5 fixed the seven fields the package forgot to
 declare; this is the inverse error — fields the package correctly refuses to
 declare, but then fails to reject at runtime.
-
 
 ---
 
