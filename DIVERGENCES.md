@@ -299,14 +299,46 @@ accepted by the ledger, and that reusing the same ticket is rejected. The
 story documents the gap rather than working around it silently, so the test
 fails loudly if the shape ever changes.
 
-**Status:** 🟡 **Partially fixed — 10 of 79 factories done, not yet released.**
-See "Progress" below. Severity: low for the six convenience fields, medium for
-`TicketSequence`.
+**Status:** 🟡 **Partially fixed, not yet released.** Severity: low for the six
+convenience fields, medium for `TicketSequence`.
 
-**Progress (in `146-xrpjs` working tree, uncommitted).** The fix is being
-applied **one family at a time**, proving the pattern before scaling it — a
-79-file refactor is a two-file revert when it goes wrong on family 1, and a
-79-file archaeology exercise when it goes wrong on family 79.
+**Corrected progress (measured 2026-10-04).** "10 of 79 done" undercounts the
+work banked, because the fix has **two independent halves** at very different
+levels of completion. Counting each separately:
+
+| Half | What it means | Done | Remaining |
+|---|---|---|---|
+| **Type surface** | props interface inherits `BaseTransactionFields` | **11/79** | 68 |
+| **Runtime validation** | factory calls `validateBaseTransaction` | **38/79** | 41 |
+
+By file, over all 79:
+
+| Category | Count | Missing |
+|---|---|---|
+| Fully converted | 10 | — |
+| Runtime done, type missing | 28 | the type change only |
+| Neither | 40 | both |
+| Type done, runtime missing | 1 (`vault-clawback`) | the runtime call only |
+
+`vault-clawback` importing `BaseTransactionFields` without ever calling
+`validateBaseTransaction` is an inconsistency rather than a gap, and is worth
+fixing for its own sake. The 28 runtime-only files are the cheapest remaining
+work: validation already happens, only the type surface is missing.
+
+Reproduce:
+
+```bash
+cd 146-xrpjs
+for f in src/fp/factories/*.ts; do
+  t=$(grep -c BaseTransactionFields "$f"); r=$(grep -c validateBaseTransaction "$f")
+  echo "$t $r $(basename "$f" .ts)"
+done | sort
+```
+
+**Progress detail.** The fix is being applied **one family at a time**, proving
+the pattern before scaling it — a 79-file refactor is a two-file revert when it
+goes wrong on family 1, and a 79-file archaeology exercise when it goes wrong on
+family 79.
 
 Ten factories across five families converted so far:
 
@@ -360,8 +392,10 @@ ticketCreate({ ..., TicketSequence: 42 }) -> builds  ← previously impossible
 
 `validateBaseTransaction` is no longer orphaned: it has its first real callers.
 
-**Still open:** the other 69 factories. And the 90 tests added here are family
-scoped — they are not a claim about the package.
+**Still open:** 68 factories still lack the type change, 41 still lack the
+validator call, and `vault-clawback` is missing only the call. The work has been
+handed to a second agent. The 90 tests added here are family scoped — they are
+not a claim about the package.
 
 ---
 
