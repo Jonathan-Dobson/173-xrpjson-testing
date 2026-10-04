@@ -18,7 +18,7 @@ findings or protocol rules — those live in the repo and are cited there:
 The xrpjson **source** lives at:
 
 ```
-/Users/jdobson/developer/146-xrpjs      # package name is `xrpjson`, dir is not
+/Users/jdobson/developer/175-xrpjson      # package name is `xrpjson`, dir is not
 ```
 
 Searching for a directory matching the package name finds nothing. To read a
@@ -27,11 +27,11 @@ behaviour from the installed `dist/`.
 
 ## Search tooling points at the source repo
 
-Both the `codesearch` MCP and the HTTP server index `146-xrpjs` — not this
+Both the `codesearch` MCP and the HTTP server index `175-xrpjson` — not this
 repo. They share one collection, so results are interchangeable.
 
 ```bash
-cd /Users/jdobson/developer/146-xrpjs
+cd /Users/jdobson/developer/175-xrpjson
 npx codesearch serve        # HTTP fallback on :7700; MCP needs no daemon
 ```
 

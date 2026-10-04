@@ -328,7 +328,7 @@ work: validation already happens, only the type surface is missing.
 Reproduce:
 
 ```bash
-cd 146-xrpjs
+cd 175-xrpjson
 for f in src/fp/factories/*.ts; do
   t=$(grep -c BaseTransactionFields "$f"); r=$(grep -c validateBaseTransaction "$f")
   echo "$t $r $(basename "$f" .ts)"
@@ -352,7 +352,7 @@ Ten factories across five families converted so far:
 | `AccountSet` | `accountSet` | same | +9 |
 
 Families 3–6 were applied by a codemod rather than by hand, and the result is
-byte-identical in shape to families 1–2. `146-xrpjs` gates: tsc 0, lint 0,
+byte-identical in shape to families 1–2. `175-xrpjson` gates: tsc 0, lint 0,
 **2948 tests** (was 2858). **Not one pre-existing test broke** — that is the
 actual evidence that the pattern generalises rather than merely type-checks.
 
@@ -439,7 +439,7 @@ transaction object that looks valid and fails at submission with an opaque
 [14] (`integration/tests/14-amm-deposit-flags.mjs`) — rippled answers
 `temMALFORMED` for both the zero-flag and two-flag cases, matching the
 `popcount(flags & tfDepositSubTx) != 1` check the fix implements. The factory
-half is covered by 45 unit tests in `146-xrpjs`; the ledger half can only be
+half is covered by 45 unit tests in `175-xrpjson`; the ledger half can only be
 settled against a network, which is why suite [14] exists.
 
 **Found by:** diffing sibling factories against each other rather than against
@@ -519,7 +519,7 @@ here.
 ## Bugs #8–#10 — Three over-strict factories (fixed in 146, awaiting release)
 
 These three came from the flag-contradiction audit in
-`146-xrpjs/docs/audit/2026-10-02-flag-contradiction-audit.md`, and they are the
+`175-xrpjson/docs/audit/2026-10-02-flag-contradiction-audit.md`, and they are the
 **opposite shape** to Bugs #6 and #7. Those two accepted what the ledger
 refused; these three *refused what the ledger accepts*. A user following the
 documentation could not build a valid transaction at all.
@@ -554,7 +554,7 @@ same mask. `SponsorFlags: 0x00000003` is the documented fee+reserve form.
 
 This is `SponsorFlags`, not `Flags` — `Flags` itself is correct here.
 
-**Status:** ✅ **Fixed in `146-xrpjs` `3a55880`, not yet released, and now
+**Status:** ✅ **Fixed in `175-xrpjson` `3a55880`, not yet released, and now
 ledger-verified.** Closed 2026-10-02.
 
 **The ledger verdict.** This bug was previously unclosable: `featureSponsor` is
@@ -965,7 +965,7 @@ starts returning `false`.
     inside `require()` could run, and there is no central wrapper to hold one.
 - **Fixed by this project:** Bugs #1, #2, #3 (v1.0.3 / v1.0.4 / v1.1.0) and
   **#6 and #7 (v1.2.0)** — the latter two verified against a live ledger by
-  suite [14]. Bugs #8, #9 and #10 are fixed in `146-xrpjs` `3a55880` but
+  suite [14]. Bugs #8, #9 and #10 are fixed in `175-xrpjson` `3a55880` but
   **not yet released**; all three are now ledger-verified by suite [15] —
   #9 and #10 on testnet, #8 on devnet, which is the only public network with
   the `Sponsor` amendment enabled.

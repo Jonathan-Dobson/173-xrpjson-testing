@@ -85,7 +85,7 @@ console.log('');
 // gets a controlled pair: a case rippled accepts beside one it rejects, so a
 // lone "it succeeded" cannot be mistaken for the gate having disappeared.
 //
-// NOTE: this suite imports the FIXED dist from the 146-xrpjs working tree,
+// NOTE: this suite imports the FIXED dist from the 175-xrpjson working tree,
 // not this repo's published node_modules copy. It is the one suite that does,
 // because the three fixes it verifies are not released yet.
 accumulate(await runFlagDefectVerification(client, alice, bob));

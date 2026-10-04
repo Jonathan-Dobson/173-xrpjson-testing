@@ -102,11 +102,11 @@ export async function run(client, alice) {
   if (xrpjsonVersion === '1.1.0') {
     skip(
       'ammDeposit refuses a deposit with no mode flag (factory half)',
-      `needs xrpjson >= 1.2.0; installed ${xrpjsonVersion}. Covered by the unit suite in 146-xrpjs.`,
+      `needs xrpjson >= 1.2.0; installed ${xrpjsonVersion}. Covered by the unit suite in 175-xrpjson.`,
     );
     skip(
       'ammDeposit refuses two mode flags combined (factory half)',
-      `needs xrpjson >= 1.2.0; installed ${xrpjsonVersion}. Covered by the unit suite in 146-xrpjs.`,
+      `needs xrpjson >= 1.2.0; installed ${xrpjsonVersion}. Covered by the unit suite in 175-xrpjson.`,
     );
   } else {
     await runTest('ammDeposit refuses a deposit with no mode flag', () => {

@@ -1,10 +1,10 @@
 /**
  * [15] Flag-defect live verification — settles the three defects found in the
  * 2026-10-02 flag-contradiction audit
- * (`146-xrpjs/docs/audit/2026-10-02-flag-contradiction-audit.md`).
+ * (`175-xrpjson/docs/audit/2026-10-02-flag-contradiction-audit.md`).
  *
  * Those three are all the same shape: the FACTORY rejected a transaction the
- * LEDGER accepts. The unit tests in `146-xrpjs` prove the factory now builds
+ * LEDGER accepts. The unit tests in `175-xrpjson` prove the factory now builds
  * them. This suite proves the other half — that the ledger really does accept
  * them — so the fix cannot be quietly "corrected" back on the assumption that
  * the strict reading was the right one.
@@ -15,7 +15,7 @@
  *
  * NOTE ON THE xrpjson IMPORT. This repo's `node_modules/xrpjson` is the
  * PUBLISHED 1.2.0, which does NOT contain the three fixes. We import the
- * locally built dist from the 146-xrpjs working tree instead, so these
+ * locally built dist from the 175-xrpjson working tree instead, so these
  * results are about the fixed code. If that path moves, this suite fails
  * loudly rather than silently testing the old package.
  *
@@ -25,8 +25,8 @@
 
 import { createRunner } from '../helpers.mjs';
 
-// The FIXED factories, from the 146-xrpjs working tree (not node_modules).
-const XRPJSON_SRC = '/Users/jdobson/developer/146-xrpjs/dist/fp/index.js';
+// The FIXED factories, from the 175-xrpjson working tree (not node_modules).
+const XRPJSON_SRC = '/Users/jdobson/developer/175-xrpjson/dist/fp/index.js';
 const { nftokenMint, mptokenIssuanceCreate, sponsorshipTransfer } =
   await import(XRPJSON_SRC);
 

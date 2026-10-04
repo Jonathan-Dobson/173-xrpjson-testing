@@ -32,7 +32,7 @@ sibling checkout. It still resolves `xrpjson` from *this* repo's
 `node_modules`, so it is testing the published types as a consumer sees them.
 
 ```bash
-/Users/jdobson/developer/146-xrpjs/node_modules/.bin/tsc --noEmit \
+/Users/jdobson/developer/175-xrpjson/node_modules/.bin/tsc --noEmit \
   --module nodenext --moduleResolution nodenext --target es2022 \
   --skipLibCheck integration/demos/bug5-base-fields/type-demo.ts
 ```

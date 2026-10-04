@@ -98,7 +98,7 @@ self-contained and non-destructive — it creates no AMM, because the AMMDeposit
 flag check is a *preflight* check that runs before any pool state is read.
 
 `15-flag-defect-verification.mjs` is the one suite that imports the **fixed
-`dist` from the `146-xrpjs` working tree** rather than this repo's published
+`dist` from the `175-xrpjson` working tree** rather than this repo's published
 `node_modules` copy — the three fixes it verifies (Bugs #8–#10) are not
 released yet. It fails loudly if that path moves, rather than silently testing
 the old package. Once 1.3.0 ships, point it back at `xrpjson` proper.
@@ -191,7 +191,7 @@ This project caused two xrpjson releases and guards a third:
   fields through, so all seven work if you cast past the type. `TicketSequence`
   is the practical case: `ticketCreate` works, but spending the ticket needs a
   hand-merge.
-  **Partial fix in `146-xrpjs`, not yet released.** The fix has two independent
+  **Partial fix in `175-xrpjson`, not yet released.** The fix has two independent
   halves, and counting them separately shows far more banked than "10 of 79"
   suggests — as of 2026-10-04, **11/79** factories carry the type change and
   **38/79** call `validateBaseTransaction`. 28 are runtime-only (the type change
@@ -219,7 +219,7 @@ a live ledger by suite [14].
 
 **Fixed by this project, not yet released** — three factories were *too strict*,
 refusing transactions the ledger accepts (Bugs #8, #9, #10, fixed in
-`146-xrpjs` `3a55880`):
+`175-xrpjson` `3a55880`):
 
 - `sponsorshipTransfer` rejected `spfSponsorFee`, making the documented
   fee-and-reserve combination unconstructible. **Now ledger-verified on devnet** —
