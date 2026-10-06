@@ -721,7 +721,7 @@ the prose disagree here, and the ledger is what settles it.
 
 ---
 
-## Bug #11 — Every factory serialises unrecognised props straight to the wire (OPEN)
+## Bug #11 — Every factory serialises unrecognised props straight to the wire (FIXED in 1.4.0)
 
 **Factories:** all 79. Systemic, not per-factory.
 
@@ -894,6 +894,69 @@ Note the adjacency to Bug #5: both are the same root cause, *no closed
 field-set enforcement*. Bug #5 fixed the seven fields the package forgot to
 declare; this is the inverse error — fields the package correctly refuses to
 declare, but then fails to reject at runtime.
+
+### Resolution — shipped in `xrpjson` 1.4.0
+
+The inverted index above was implemented as specified, with **one correction to
+its source-of-truth claim**, which this section got wrong:
+
+> "it is generatable from the package's own props interfaces — the source of
+> truth is already in the repo"
+
+Generating from the interfaces alone proves **self-consistency, not correctness**.
+An index built only from those interfaces cannot catch a misplacement of a field
+the library does not model, which is a large part of the class of mistake the
+index exists to catch. The shipped index is the **union** of both sources:
+
+| Source | Contributes | Why it is needed |
+|---|---|---|
+| 79 `XxxProps` interfaces | 139 fields | The only place the library's own surface is stated |
+| `TRANSACTION_FORMATS` (protocol) | 4 further fields | Real ledger fields with no interface here |
+| Common-field set | 20, excluded | Valid everywhere; an entry could never reject |
+
+Merged: **143 fields, 322 field/type pairs, 87 valid on exactly one type.**
+
+`TRANSACTION_FORMATS` is the per-transaction field table in
+`ripple-binary-codec/src/enums/definitions.json`. Note that **xrpl.js does not
+re-export it** — the normalised `DEFAULT_DEFINITIONS` object flattens it into
+code/name maps (`field` is 722 `name -> {nth, type, header}` entries carrying no
+notion of which transaction accepts a field). The nested table survives only in
+the raw `definitions.json`, which is why the generator reads that file directly.
+It is a **devDependency** input and the result is committed, so the zero-runtime-
+dependency property holds.
+
+**Why the union and not protocol-only.** codec 2.11.0 lags the library:
+`AccountSet` declares `NFTokenBrokerFee`, which the codec places only on
+`NFTokenAcceptOffer`. A protocol-only index would reject a field this library
+deliberately supports and has tests for — a bugfix become a breaking release.
+The union has one property that makes it safe: merging can only ever **widen**
+a field's accepted-type set, never narrow it, so no call that works today can
+start failing.
+
+**What it did not catch, by design.** A field with no index entry is one the
+library does not model yet and still passes (`base.ts:100`). A pure typo such as
+`TotallyBogusField` is indistinguishable from a future amendment field to any
+library with a closed global field list, so it still reaches the codec — as it
+did in the v1.2.0 repro above. Closing that would require a per-type allowlist
+and would break the forward-compatibility hatch, which is the tradeoff this
+design exists to avoid.
+
+**Four bogus fields in this harness's own fixtures**, exposed the moment the
+check went live (baseline was 236/236 before the change):
+
+| Factory | Field | Belongs to |
+|---|---|---|
+| `confidentialMptSend` | `MPTAmount` | ConfidentialMPTClawback/Convert/ConvertBack |
+| `xchainAccountCreateCommit` | `XChainClaimID` | XChainAddClaimAttestation/Claim/Commit |
+| `xchainAddAccountCreateAttestation` | `XChainClaimID` | XChainAddClaimAttestation/Claim/Commit |
+| `xchainAddClaimAttestation` | `SignatureReward` | 5 other xchain types |
+
+Every one is confirmed absent from **both** the protocol's
+`TRANSACTION_FORMATS` and the library's own props interface, so these were
+**fixture bugs, not library bugs** — they had passed only because nothing
+rejected them. A fifth, `AttestationRewardAmount`, appears in no protocol
+version at all and was removed in the same pass. Fixed here; these are `.mjs`
+files, which TypeScript never checked.
 
 ---
 

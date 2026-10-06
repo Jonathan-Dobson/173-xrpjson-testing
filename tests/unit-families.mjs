@@ -308,7 +308,6 @@ checkFactory('confidentialMptSend', xrpjson.confidentialMptSend, {
   Account: ACCOUNT_A,
   Destination: ACCOUNT_B,
   MPTokenIssuanceID: MPT_ISSUANCE_ID,
-  MPTAmount: '100',
   SenderEncryptedAmount: ENCRYPTED_AMOUNT,
   DestinationEncryptedAmount: ENCRYPTED_AMOUNT,
   IssuerEncryptedAmount: ENCRYPTED_AMOUNT,
@@ -694,7 +693,6 @@ checkFactory('vaultWithdraw', xrpjson.vaultWithdraw, {
 checkFactory('xchainAccountCreateCommit', xrpjson.xchainAccountCreateCommit, {
   Account: ACCOUNT_A,
   XChainBridge: XCHAIN_BRIDGE,
-  XChainClaimID: '00000000000000000000000000000000000000000000000000000001',
   Amount: '1000000',
   Destination: ACCOUNT_B,
   // SignatureReward required (XRP drops, ≥ 0)
@@ -704,14 +702,12 @@ checkFactory('xchainAccountCreateCommit', xrpjson.xchainAccountCreateCommit, {
 checkFactory('xchainAddAccountCreateAttestation', xrpjson.xchainAddAccountCreateAttestation, {
   Account: ACCOUNT_A,
   XChainBridge: XCHAIN_BRIDGE,
-  XChainClaimID: '00000000000000000000000000000000000000000000000000000001',
   Amount: '1000000',
   AttestationSignerAccount: ACCOUNT_B,
   Destination: ACCOUNT_C,
   Signature: 'A'.repeat(256),
   PublicKey: 'A0'.repeat(33),
   AttestationRewardAccount: ACCOUNT_A,
-  AttestationRewardAmount: '100',
   OtherChainSource: ACCOUNT_B,
   SignatureReward: '100',
   WasLockingChainSend: 1,
@@ -728,9 +724,7 @@ checkFactory('xchainAddClaimAttestation', xrpjson.xchainAddClaimAttestation, {
   Signature: 'A'.repeat(256),
   PublicKey: 'A0'.repeat(33),
   AttestationRewardAccount: ACCOUNT_A,
-  AttestationRewardAmount: '100',
   OtherChainSource: ACCOUNT_B,
-  SignatureReward: '100',
   // WasLockingChainSend (UInt8 boolean)
   WasLockingChainSend: 1,
 }, 'XChainAddClaimAttestation');
